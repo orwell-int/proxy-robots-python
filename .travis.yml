@@ -4,8 +4,10 @@ python:
     - "3.2"
     - "3.3"
 install:
+    - sudo apt-get update -qq
     - sudo apt-get install -qq libprotobuf-dev libzmq3-dev protobuf-compiler
+    - sudo apt-get install -qq libbluetooth-dev bluez-tools bluez bluetooth
     - git submodule update --init --recursive
     - pip install -r requirements.txt
-    - pip install -e .
+    - ./generate.sh
 script: nosetests
