@@ -4,6 +4,7 @@ python:
     - "3.2"
     - "3.3"
 install:
+    - sudo apt-get install -qq libprotobuf-dev libzmq3-dev protobuf-compiler
     - git submodule update --init --recursive
     - pip install -r requirements.txt
     - pip install -e .
