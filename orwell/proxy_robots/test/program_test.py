@@ -4,6 +4,7 @@ import orwell.messages.server_game_pb2 as server_game_messages
 from nose.tools import assert_equals
 from nose.tools import assert_true
 from nose.tools import assert_false
+from enum import Enum
 
 
 INPUTS = [
@@ -89,6 +90,7 @@ class MockSubscriber(object):
 
 
 def test_robot_registration():
+    print "\ntest_robot_registration"
     arguments = FakeArguments()
     program = opp.Program(arguments, MockSubscriber, MockPusher)
     for robot_id, _, device in ROBOT_DESCRIPTORS:
@@ -125,8 +127,129 @@ def check_simple_input(program):
         assert_equals(len(device.expected_moves), 0)
 
 
+INPUT_MOVE = (0.89, -0.5)
+
+
+class DummyDevice(object):
+    def __init__(self, robot_id):
+        self._moved = False
+
+    def __dell(self):
+        assert_true(self._moved)
+
+    def move(
+            self,
+            left,
+            right):
+        print 'move', left, right
+        assert_equals(INPUT_MOVE[0], left)
+        assert_equals(INPUT_MOVE[1], right)
+        self._moved = True
+
+
+INPUT_ROBOT_DESCRIPTOR = ('55', 'Jambon', DummyDevice('55'))
+
+
+class MockerStorage(object):
+    def __init__(self, address, port, context):
+        self.address = address
+        self.port = port
+        self.context = context
+
+
+class Mocker(object):
+    def __init__(self):
+        self._pusher = None
+        self._publisher = None
+
+    def pusher_init_faker(self):
+        def fake_init(address, port, context):
+            self._pusher = MockerStorage(address, port, context)
+            return self
+        return fake_init
+
+    def publisher_init_faker(self):
+        def fake_init(address, port, context):
+            self._publisher = MockerStorage(address, port, context)
+            return self
+        return fake_init
+
+
+class InputMockerState(Enum):
+    Created = 0
+    Register = 1
+    Registered = 2
+    Input = 3
+
+
+class InputMocker(Mocker):
+    def __init__(self):
+        super(Mocker, self).__init__()
+        self._state = InputMockerState.Created
+        self._robot_id = None
+        self._robot_name = INPUT_ROBOT_DESCRIPTOR[1]
+        self._team = server_game_messages.BLU
+
+    def read(self):
+        print 'Fake read'
+        payload = None
+        if (InputMockerState.Register == self._state):
+            message = opp.REGISTRY[opp.Messages.Registered.name]()
+            message.name = self._robot_name
+            message.team = self._team
+            payload = "{0} {1} {2}".format(
+                opp.Messages.Registered.name,
+                self._robot_id,
+                message.SerializeToString())
+            print 'Fake message =', message
+            self._state = InputMockerState.Input
+        elif (InputMockerState.Input == self._state):
+            message = opp.REGISTRY[opp.Messages.Input.name]()
+            message.move.left = INPUT_MOVE[0]
+            message.move.right = INPUT_MOVE[1]
+            message.fire.weapon1 = False
+            message.fire.weapon2 = False
+            payload = "{0} {1} {2}".format(
+                opp.Messages.Input.name,
+                self._robot_id,
+                message.SerializeToString())
+            print 'Fake message =', message
+        return payload
+
+    def write(self, payload):
+        print 'Fake write'
+        if (InputMockerState.Created == self._state):
+            message_type, routing_id, raw_message = payload.split(' ', 2)
+            if (opp.Messages.Register.name == message_type):
+                message = opp.REGISTRY[message_type]()
+                message.ParseFromString(raw_message)
+                self._robot_id = message.robot_id
+                self._state = InputMockerState.Register
+            else:
+                print "We should not be here"
+                assert(False)
+
+
+def test_robot_input():
+    print "\ntest_robot_input"
+    arguments = FakeArguments()
+    input_mocker = InputMocker()
+    program = opp.Program(
+        arguments,
+        input_mocker.publisher_init_faker(),
+        input_mocker.pusher_init_faker())
+    robot_id, robot_name, device = INPUT_ROBOT_DESCRIPTOR
+    program.add_robot(robot_id, device)
+    program.step()
+    program.step()
+    program.step()
+    #import time
+    #time.sleep(1)
+
+
 def main():
     test_robot_registration()
+    test_robot_input()
 
 if ("__main__" == __name__):
     main()
