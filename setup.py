@@ -21,7 +21,7 @@ setup(
     author_email='',
     packages=find_packages(exclude="test"),
     test_suite='nose.collector',
-    install_requires=['zmq', 'pybluez', 'enum34', 'protobuf'],
+    install_requires=['pyzmq', 'pybluez', 'enum34', 'protobuf'],
     tests_require=['nose'],
     entry_points={
         'console_scripts': [
