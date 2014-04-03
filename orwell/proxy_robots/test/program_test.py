@@ -33,8 +33,8 @@ ROBOT_DESCRIPTORS = [('951', 'Grenade', FakeDevice('951'))]
 
 
 class FakeArguments(object):
-    publisher_port = '1'
-    puller_port = '2'
+    publisher_port = 1
+    puller_port = 2
     address = '1.2.3.4'
 
 
@@ -247,9 +247,39 @@ def test_robot_input():
     #time.sleep(1)
 
 
+class FakeSocket(object):
+    def __init__(self, expected_content_list):
+        self._expected_content_list = expected_content_list
+
+    def __del__(self):
+        assert_equals(0, len(self._expected_content_list))
+
+    #def close(self):
+        #pass
+
+    def send(self, content):
+        expected_content = self._expected_content_list.pop(0)
+        assert_equals(expected_content, content)
+
+
+def test_fake_socket():
+    robots = ['951']
+    arguments = FakeArguments()
+    program = opp.Program(arguments)
+    for robot in robots:
+        socket = FakeSocket(
+            ['\x0c\x00\x00\x00\x80\x00\x00\xa4\x00\x01\x1f\xa6\x00\x01',
+             '\x0c\x00\x00\x00\x80\x00\x00\xa4\x00\x08\x1f\xa6\x00\x08',
+             '\t\x00\x00\x00\x80\x00\x00\xa3\x00\t\x00'])
+        device = opp.EV3Device(socket)
+        program.add_robot(robot, device)
+        device.move(1, 1)
+
+
 def main():
     test_robot_registration()
     test_robot_input()
+    test_fake_socket()
 
 if ("__main__" == __name__):
     main()

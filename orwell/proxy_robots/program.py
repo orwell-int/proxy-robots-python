@@ -46,7 +46,7 @@ class Pusher(object):
 class MessageHub(object):
     """
     Class that is in charge of orchestrating reads and writes.
-    Items that are to be written are provided with #post and 
+    Items that are to be written are provided with #post and
     objects that want to be notified of reads listen through #register.
     """
     def __init__(
@@ -62,8 +62,8 @@ class MessageHub(object):
         `address`: address used for both reads and writes.
         `subscriber_type`: for testing purpose ; class to use as a subscriber
           which reads from the publisher port.
-        `pusher_type`: for testing purpose ; class to use as pusher which writes
-          to the puller port.
+        `pusher_type`: for testing purpose ; class to use as pusher which
+          writes to the puller port.
         """
         self._context = zmq.Context()
         self._pusher = pusher_type(
@@ -469,42 +469,50 @@ class Robot(object):
 
 
 class SocketsLister(object):
+    """
+    Class that for now lists bluetooth device and open the matching sockets.
+    """
     def __init__(self):
         self._sockets = []
         self._sockets += self._discover_bluetooth()
         self._busy_map = [False for _ in self._sockets]
 
-    def __del__(self):
-        for device in self._sockets:
-            device.close()
+    # maybe the socket object does it itself
+    #def __del__(self):
+        #"""
+        #Make sure we close all the sockets.
+        #"""
+        #for socket in self._sockets:
+            #socket.close()
 
-    def get_available_socket(self):
-        make_busy = None
+    def pop_available_socket(self):
+        """
+        Return the first available socket (or None if none is found).
+        #You will be responsible of closing it.
+        """
         available_socket = None
-        for index, (busy, socket) in enumerate(
-                zip(self._busy_map, self._sockets)):
-            if (not busy):
-                make_busy = index
-                available_socket = socket
-                break
-        if (make_busy is not None):
-            self._busy_map[make_busy] = True
+        if (self._sockets):
+            available_socket = self._sockets.pop(0)
         return available_socket
 
     def _discover_bluetooth(self):
         import bluetooth
+        import pprint
+        pp = pprint.PrettyPrinter(indent=4)
         usable_sockets = []
         devices = bluetooth.discover_devices()
         for device in devices:
             service = bluetooth.find_service(address=device)
             if (service):
                 info_map = service[0]
-                #print info_map
-                socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-                host = info_map['host']
-                port = info_map['port']
-                socket.connect((host, port))
-                usable_sockets.append(socket)
+                pp.pprint(info_map)
+                protocol = info_map['protocol']
+                if ('RFCOMM' == protocol):
+                    socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+                    host = info_map['host']
+                    port = info_map['port']
+                    socket.connect((host, port))
+                    usable_sockets.append(socket)
         return usable_sockets
 
 
@@ -522,12 +530,17 @@ class Motors(Enum):
 
 class EV3Device(object):
     def __init__(self, socket):
+        assert(socket is not None)
         self._socket = socket
 
     def __del__(self):
+        """
+        Just in case the last order was a move command, stop the robot.
+        """
         self.stop()
+        #self._socket.close()
 
-    def get_move_command(motor, power, move=MoveOrder.POWER, safe=True):
+    def get_move_command(self, motor, power, move=MoveOrder.POWER, safe=True):
         """
         `motor`: Motors enum (can be a sum)
         `power`: -31..31
@@ -548,7 +561,7 @@ class EV3Device(object):
             order = "A4"
         command = "0C000000800000" + order + "00"\
             + str_motor + str_power + "A600" + str_motor
-        return command
+        return command.decode('hex')
 
     def get_stop_command(self, motor):
         """
@@ -556,22 +569,23 @@ class EV3Device(object):
         """
         str_motor = "{0:02d}".format(motor)
         command = "09000000800000A300" + str_motor + "00"
-        return command
+        return command.decode('hex')
 
     def move(self, left, right):
         """
         `left`: -1..1
         `right`: -1..1
         """
+        # 31 is a magic number comming from trial and error
         scaled_left = int(float(left) * float(31))
         scaled_right = int(float(right) * float(31))
-        command = self.get_move_command(Motors.A, scaled_left)
+        command = self.get_move_command(Motors.A.value, scaled_left)
         self._socket.send(command)
-        command = self.get_move_command(Motors.D, scaled_right)
+        command = self.get_move_command(Motors.D.value, scaled_right)
         self._socket.send(command)
 
     def stop(self):
-        command = self.get_stop_command(Motors.A + Motors.D)
+        command = self.get_stop_command(Motors.A.value + Motors.D.value)
         self._socket.send(command)
 
 
@@ -636,7 +650,7 @@ def main():
     robots = ['951']
     program = Program(arguments)
     for robot in robots:
-        socket = sockets_lister.get_available_socket()
+        socket = sockets_lister.pop_available_socket()
         if (socket):
             device = EV3Device(socket)
             program.add_robot(robot, device)
