@@ -29,7 +29,7 @@ class Subscriber(object):
         self._socket.connect(url)
 
     def read(self):
-        return 'AHAHAHA!'
+        return self._socket.recv(flags=zmq.DONTWAIT)
 
 
 class Pusher(object):
@@ -657,6 +657,8 @@ def main():
             print 'Device found for robot', robot
         else:
             print 'Oups, no device to associate to robot', robot
+    while (True):
+        program.step()
 
 if ("__main__" == __name__):
     main()
