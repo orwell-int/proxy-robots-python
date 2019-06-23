@@ -123,10 +123,12 @@ class MessageHub(object):
         if (debug):
             print('string =', repr(string))
         if (string is not None):
-            message_type, routing_id, raw_message = string.split(' ', 2)
+            message_type, routing_id, raw_message = string.split(b' ', 2)
             if (debug):
                 print('message_type =', message_type)
                 print('routing_id =', routing_id)
+            message_type = message_type.decode('ascii')
+            routing_id = routing_id.decode('ascii')
             message = REGISTRY[message_type]()
             message.ParseFromString(raw_message)
             for expected_routing_id, listener in self._listeners[message_type]:
@@ -341,7 +343,7 @@ class Robot(object):
         `device`: deviced used to communicate with the robot.
         """
         self._robot_id = robot_id
-        self._name = ''
+        # self._name = ''
         self._message_hub = message_hub
         self._actionner = actionner
         self._device = device
@@ -359,9 +361,9 @@ class Robot(object):
     def robot_id(self):
         return self._robot_id
 
-    @property
-    def name(self):
-        return self._name
+    # @property
+    # def name(self):
+        # return self._name
 
     @property
     def left(self):
@@ -419,10 +421,10 @@ class Robot(object):
         message = REGISTRY[Messages.Register.name]()
         message.temporary_robot_id = self._robot_id
         message.image = "no image"
-        payload = '{0} {1} {2}'.format(
+        payload = '{0} {1} '.format(
             Messages.Register.name,
-            self._robot_id,
-            message.SerializeToString())
+            self._robot_id).encode()
+        payload += message.SerializeToString()
         self._message_hub.post(payload)
 
     def notify(
@@ -445,15 +447,20 @@ class Robot(object):
         """
         Flag the robot as registered if the server replied with a name.
         """
-        if (message.name):
-            self._registered = True
-            self._name = message.name
-            #print('Robot registered (robot_id = {0} ; name = {1})'.format()
-                #self._robot_id,
-                #self._name)
-            # this is a hack as we should only register when the game starts
-            self._message_hub.register(
-                self, Messages.Input.name, self._robot_id)
+        self._registered = True
+        # this is a hack as we should only register when the game starts
+        self._message_hub.register(
+            self, Messages.Input.name, self._robot_id)
+        # there is no longer a name attribute in Registered
+        # if (message.name):
+            # self._registered = True
+            # self._name = message.name
+            # #print('Robot registered (robot_id = {0} ; name = {1})'.format()
+                # #self._robot_id,
+                # #self._name)
+            # # this is a hack as we should only register when the game starts
+            # self._message_hub.register(
+                # self, Messages.Input.name, self._robot_id)
 
     def _notify_input(self, message):
         """
@@ -615,7 +622,7 @@ class Program(object):
         """
         self._actionner.step()
         self._message_hub.step()
-        map(lambda robot: robot.step(), self._robots.itervalues())
+        map(lambda robot: robot.step(), self._robots.values())
 
 
 def main():
