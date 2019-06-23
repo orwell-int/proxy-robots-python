@@ -4,6 +4,7 @@ if [ ! -e "$is_module" ] ; then
 	mkdir -p orwell/messages
 	touch "$is_module"
 fi
+protoc -I=messages --python_out=orwell/messages/ messages/common.proto
 protoc -I=messages --python_out=orwell/messages/ messages/controller.proto
 protoc -I=messages --python_out=orwell/messages/ messages/server-game.proto
 protoc -I=messages --python_out=orwell/messages/ messages/server-web.proto

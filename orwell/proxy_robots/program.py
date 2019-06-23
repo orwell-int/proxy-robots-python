@@ -1,3 +1,4 @@
+from __future__ import print_function
 import argparse
 import zmq
 import orwell.messages.robot_pb2 as robot_messages
@@ -5,7 +6,9 @@ import orwell.messages.server_game_pb2 as server_game_messages
 import orwell.messages.controller_pb2 as controller_messages
 import collections
 from enum import Enum
+import codecs
 
+decode_hex = codecs.getdecoder("hex_codec")
 
 class Messages(Enum):
     Register = 'Register'
@@ -24,7 +27,7 @@ class Subscriber(object):
     def __init__(self, address, port, context):
         self._socket = context.socket(zmq.SUB)
         self._socket.setsockopt(zmq.LINGER, 0)
-        self._socket.setsockopt(zmq.SUBSCRIBE, "")
+        self._socket.setsockopt_string(zmq.SUBSCRIBE, "")
         url = "tcp://%s:%i" % (address, port)
         self._socket.connect(url)
 
@@ -88,7 +91,7 @@ class MessageHub(object):
         Tell that #listener wants to be notified of messages read for type
         #message_type and routind id #routing_id.
         """
-        #print 'MessageHub.register({0}, {1}, {2}'.format(
+        #print('MessageHub.register({0}, {1}, {2}'.format()
             #listener, message_type, routing_id)
         if ((listener, routing_id) not in self._listeners[message_type]):
             self._listeners[message_type].append((routing_id, listener))
@@ -114,22 +117,22 @@ class MessageHub(object):
         """
         debug = True
         if (debug):
-            print 'MessageHub.step()'
-            print '_listeners =', self._listeners
+            print('MessageHub.step()')
+            print('_listeners =', self._listeners)
         string = self._subscriber.read()
         if (debug):
-            print 'string =', repr(string)
+            print('string =', repr(string))
         if (string is not None):
             message_type, routing_id, raw_message = string.split(' ', 2)
             if (debug):
-                print 'message_type =', message_type
-                print 'routing_id =', routing_id
+                print('message_type =', message_type)
+                print('routing_id =', routing_id)
             message = REGISTRY[message_type]()
             message.ParseFromString(raw_message)
             for expected_routing_id, listener in self._listeners[message_type]:
                 if (debug):
-                    print 'listener =', listener
-                    print 'expected_routing_id =', expected_routing_id
+                    print('listener =', listener)
+                    print('expected_routing_id =', expected_routing_id)
                 if (expected_routing_id):
                     is_expected = True
                 else:
@@ -257,7 +260,7 @@ class Action(object):
         May only called if a proxy was provided to the constructor. Called when
         the message registered to is read.
         """
-        #print 'Action.notify({0}, {1}, {2})'.format(
+        #print('Action.notify({0}, {1}, {2})'.format()
             #message_type,
             #routing_id,
             #message)
@@ -294,9 +297,9 @@ class Actionner(object):
         Check all pending actions to see if a notification has been received.
         Run all the actions that are in the created state.
         """
-        #print 'Actionner.step()'
-        #print '_created_actions =', self._created_actions
-        #print '_pending_actions =', self._pending_actions
+        #print('Actionner.step()')
+        #print('_created_actions =', self._created_actions)
+        #print('_pending_actions =', self._pending_actions)
         poper = []
         new_actions = []
         for action in self._pending_actions:
@@ -396,7 +399,7 @@ class Robot(object):
         Create an action that will take care of registering the robot and
         dispatch the notification.
         """
-        #print 'queue_register'
+        #print('queue_register')
         proxy = Proxy(
             self._message_hub,
             self.notify,
@@ -414,7 +417,8 @@ class Robot(object):
         Post a message to ask for the registration of the robot.
         """
         message = REGISTRY[Messages.Register.name]()
-        message.robot_id = self._robot_id
+        message.temporary_robot_id = self._robot_id
+        message.image = "no image"
         payload = '{0} {1} {2}'.format(
             Messages.Register.name,
             self._robot_id,
@@ -444,7 +448,7 @@ class Robot(object):
         if (message.name):
             self._registered = True
             self._name = message.name
-            #print 'Robot registered (robot_id = {0} ; name = {1})'.format(
+            #print('Robot registered (robot_id = {0} ; name = {1})'.format()
                 #self._robot_id,
                 #self._name)
             # this is a hack as we should only register when the game starts
@@ -455,7 +459,7 @@ class Robot(object):
         """
         Make the robot move.
         """
-        print '_notify_input({0})'.format(message)
+        print('_notify_input({0})'.format(message))
         self._left = message.move.left
         self._right = message.move.right
         self._fire1 = message.fire.weapon1
@@ -496,24 +500,7 @@ class SocketsLister(object):
         return available_socket
 
     def _discover_bluetooth(self):
-        import bluetooth
-        import pprint
-        pp = pprint.PrettyPrinter(indent=4)
-        usable_sockets = []
-        devices = bluetooth.discover_devices()
-        for device in devices:
-            service = bluetooth.find_service(address=device)
-            if (service):
-                info_map = service[0]
-                pp.pprint(info_map)
-                protocol = info_map['protocol']
-                if ('RFCOMM' == protocol):
-                    socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-                    host = info_map['host']
-                    port = info_map['port']
-                    socket.connect((host, port))
-                    usable_sockets.append(socket)
-        return usable_sockets
+        return None
 
 
 class MoveOrder(Enum):
@@ -561,7 +548,7 @@ class EV3Device(object):
             order = "A4"
         command = "0C000000800000" + order + "00"\
             + str_motor + str_power + "A600" + str_motor
-        return command.decode('hex')
+        return decode_hex(command)
 
     def get_stop_command(self, motor):
         """
@@ -569,7 +556,7 @@ class EV3Device(object):
         """
         str_motor = "{0:02d}".format(motor)
         command = "09000000800000A300" + str_motor + "00"
-        return command.decode('hex')
+        return decode_hex(command)
 
     def move(self, left, right):
         """
@@ -654,9 +641,9 @@ def main():
         if (socket):
             device = EV3Device(socket)
             program.add_robot(robot, device)
-            print 'Device found for robot', robot
+            print('Device found for robot', robot)
         else:
-            print 'Oups, no device to associate to robot', robot
+            print('Oups, no device to associate to robot', robot)
     while (True):
         program.step()
 
