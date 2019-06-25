@@ -2,9 +2,12 @@ from __future__ import print_function
 import socket
 import struct
 import sys
+import logging
 # @TODO ? implement proper broadcast address finding
 # import netifaces
 
+
+LOGGER = logging.getLogger(__name__)
 
 def get_network_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -27,7 +30,7 @@ class Broadcast(object):
         broadcast = get_network_ip().split('.')
         broadcast = '.'.join(broadcast[:-1] + [ip_mask_all])
         self._group = (broadcast, port)
-        print('group = ' + str(self._group))
+        LOGGER.debug('group = ' + str(self._group))
         self._received = False
         self._data = None
         self._sender = None
@@ -44,25 +47,24 @@ class Broadcast(object):
 
     def send_one_broadcast_message(self):
         try:
-            print("before sendto")
+            LOGGER.debug("before sendto")
             sent = self._socket.sendto(
-                    "<broadcast>".encode("ascii"), self._group)
-            print("after sendto ; " + repr(sent))
+                    "1".encode("ascii"), self._group)
+            LOGGER.debug("after sendto ; " + repr(sent))
             while not self._received:
                 try:
                     self._data, self._sender = self._socket.recvfrom(
                             self._size)
                     self._received = True
                 except socket.timeout:
-                    print('timed out, no more responses', file=sys.stderr)
+                    LOGGER.warning('timed out, no more responses')
                     break
                 else:
-                    print(
+                    LOGGER.info(
                         'received "%s" from %s'
-                        % (repr(self._data), self._sender),
-                        file=sys.stderr)
+                        % (repr(self._data), self._sender))
         finally:
-            print('closing socket', file=sys.stderr)
+            LOGGER.info('closing socket')
             self._socket.close()
 
     def decode_data(self):
@@ -75,24 +77,31 @@ class Broadcast(object):
         # Address of publisher
         # 0x00
         import struct
-        to_char = lambda x: struct.unpack('B', x)[0]
+        # to_char = lambda x: struct.unpack('B', x)[0]
+        to_char = lambda x: chr(x)
         to_str = lambda x: x.decode("ascii")
-        assert(self._data[0] == '\xa0')
-        puller_size = to_char(self._data[1])
-        # print("puller_size = " + str(puller_size))
+        assert(self._data[0] == 0xa0)
+        puller_size = int(self._data[1])
+        # print("puller_size =", puller_size)
         end_puller = 2 + puller_size
         puller_address = to_str(self._data[2:end_puller])
-        # print("puller_address = " + puller_address)
-        assert(self._data[end_puller] == '\xa1')
-        publisher_size = to_char(self._data[end_puller + 1])
-        # print("publisher_size = " + str(publisher_size))
+        # print("puller_address =", puller_address)
+        assert(self._data[end_puller] == 0xa1)
+        publisher_size = int(self._data[end_puller + 1])
+        # print("publisher_size =", str(publisher_size))
         end_publisher = end_puller + 2 + publisher_size
         publisher_address = to_str(self._data[end_puller + 2:end_publisher])
-        # print("publisher_address = " + publisher_address)
-        assert(self._data[end_publisher] == '\x00')
+        # print("publisher_address =", publisher_address)
+        assert(self._data[end_publisher] == 0xa2)
+        replier_size = int(self._data[end_publisher + 1])
+        # print("replier_size =", str(replier_size))
+        end_replier = end_publisher + 2 + replier_size
+        replier_address = to_str(self._data[end_publisher + 2:end_replier])
+        # print("replier_address =", replier_address)
         sender_ip, _ = self._sender
         self._push_address = puller_address.replace('*', sender_ip)
         self._subscribe_address = publisher_address.replace('*', sender_ip)
+        self._reply_address = replier_address.replace('*', sender_ip)
         self._decding_successful = True
 
     @property
@@ -102,3 +111,7 @@ class Broadcast(object):
     @property
     def subscribe_address(self):
         return self._subscribe_address
+
+    @property
+    def reply_address(self):
+        return self._reply_address

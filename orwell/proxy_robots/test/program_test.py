@@ -8,6 +8,8 @@ from nose.tools import assert_false
 from enum import Enum
 
 
+opp.configure_logging(False)
+
 INPUTS = [
     ('951', 1.0, 0, False, False),
     ('951', 0.5, -0.5, True, False)
@@ -36,11 +38,13 @@ ROBOT_DESCRIPTORS = [('951', 'Grenade', FakeDevice('951'))]
 class FakeArguments(object):
     publisher_port = 1
     puller_port = 2
+    replier_port = 3
     address = '1.2.3.4'
+    no_server_broadcast = True
 
 
 class MockPusher(object):
-    def __init__(self, address, port, context):
+    def __init__(self, address, context):
         self.messages = []
         for robot_id, _, _ in ROBOT_DESCRIPTORS:
             message = opp.REGISTRY[opp.Messages.Register.name]()
@@ -59,7 +63,7 @@ class MockPusher(object):
 
 
 class MockSubscriber(object):
-    def __init__(self, address, port, context):
+    def __init__(self, address, context):
         self.messages = [None]
         for robot_id, robot_name, _ in ROBOT_DESCRIPTORS:
             message = opp.REGISTRY[opp.Messages.Registered.name]()
@@ -91,10 +95,18 @@ class MockSubscriber(object):
         return message
 
 
+class MockReplier(object):
+    def __init__(self, address, context):
+        pass
+
+    def exchange(self, query):
+        return None
+
+
 def test_robot_registration():
     print("\ntest_robot_registration")
     arguments = FakeArguments()
-    program = opp.Program(arguments, MockSubscriber, MockPusher)
+    program = opp.Program(arguments, MockSubscriber, MockPusher, MockReplier)
     for robot_id, _, device in ROBOT_DESCRIPTORS:
         program.add_robot(robot_id, device)
     program.step()
@@ -153,9 +165,8 @@ INPUT_ROBOT_DESCRIPTOR = ('55', 'Jambon', DummyDevice('55'))
 
 
 class MockerStorage(object):
-    def __init__(self, address, port, context):
+    def __init__(self, address, context):
         self.address = address
-        self.port = port
         self.context = context
 
 
@@ -163,16 +174,23 @@ class Mocker(object):
     def __init__(self):
         self._pusher = None
         self._publisher = None
+        self._replier = None
 
     def pusher_init_faker(self):
-        def fake_init(address, port, context):
-            self._pusher = MockerStorage(address, port, context)
+        def fake_init(address, context):
+            self._pusher = MockerStorage(address, context)
             return self
         return fake_init
 
     def publisher_init_faker(self):
-        def fake_init(address, port, context):
-            self._publisher = MockerStorage(address, port, context)
+        def fake_init(address, context):
+            self._publisher = MockerStorage(address, context)
+            return self
+        return fake_init
+
+    def replier_init_faker(self):
+        def fake_init(address, context):
+            self._replier = MockerStorage(address, context)
             return self
         return fake_init
 
@@ -242,7 +260,8 @@ def test_robot_input():
     program = opp.Program(
         arguments,
         input_mocker.publisher_init_faker(),
-        input_mocker.pusher_init_faker())
+        input_mocker.pusher_init_faker(),
+        input_mocker.replier_init_faker())
     robot_id, robot_name, device = INPUT_ROBOT_DESCRIPTOR
     program.add_robot(robot_id, device)
     program.step()
