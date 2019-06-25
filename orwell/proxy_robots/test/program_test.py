@@ -47,8 +47,8 @@ class MockPusher(object):
             message.temporary_robot_id = robot_id
             message.image = "no image"
             payload = "{0} {1} ".format(
-                opp.Messages.Register.name,
-                robot_id).encode()
+                robot_id,
+                opp.Messages.Register.name).encode()
             payload += message.SerializeToString()
             self.messages.append(payload)
 
@@ -66,8 +66,8 @@ class MockSubscriber(object):
             message.team = "BLU"
             message.robot_id = "real_" + robot_id
             payload = "{0} {1} ".format(
-                opp.Messages.Registered.name,
-                robot_id).encode()
+                robot_id,
+                opp.Messages.Registered.name).encode()
             payload += message.SerializeToString()
             self.messages.append(payload)
         for robot_id, left, right, fire1, fire2 in INPUTS:
@@ -77,8 +77,8 @@ class MockSubscriber(object):
             message.fire.weapon1 = fire1
             message.fire.weapon2 = fire2
             payload = "{0} {1} ".format(
-                opp.Messages.Input.name,
-                robot_id).encode()
+                robot_id,
+                opp.Messages.Input.name).encode()
             payload += message.SerializeToString()
             self.messages.append(payload)
 
@@ -201,8 +201,8 @@ class InputMocker(Mocker):
             message.team = self._team
             message.robot_id = "real " + self._robot_id
             payload = "{0} {1} ".format(
-                opp.Messages.Registered.name,
-                self._robot_id).encode()
+                self._robot_id,
+                opp.Messages.Registered.name).encode()
             payload += message.SerializeToString()
             print('Fake message (Registered) =', message)
             self._state = InputMockerState.Input
@@ -213,8 +213,8 @@ class InputMocker(Mocker):
             message.fire.weapon1 = False
             message.fire.weapon2 = False
             payload = "{0} {1} ".format(
-                opp.Messages.Input.name,
-                self._robot_id).encode()
+                self._robot_id,
+                opp.Messages.Input.name).encode()
             payload += message.SerializeToString()
             print('Fake message (Input) =', message)
         return payload
@@ -222,7 +222,7 @@ class InputMocker(Mocker):
     def write(self, payload):
         print('Fake write')
         if (InputMockerState.Created == self._state):
-            message_type, routing_id, raw_message = payload.split(b' ', 2)
+            routing_id, message_type, raw_message = payload.split(b' ', 2)
             message_type = message_type.decode('ascii')
             routing_id = routing_id.decode('ascii')
             if (opp.Messages.Register.name == message_type):

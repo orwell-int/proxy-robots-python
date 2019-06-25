@@ -32,7 +32,10 @@ class Subscriber(object):
         self._socket.connect(url)
 
     def read(self):
-        return self._socket.recv(flags=zmq.DONTWAIT)
+        try:
+            return self._socket.recv(flags=zmq.DONTWAIT)
+        except zmq.error.Again:
+            return None
 
 
 class Pusher(object):
@@ -43,6 +46,7 @@ class Pusher(object):
         self._socket.connect(url)
 
     def write(self, message):
+        print("Pusher.write:", message)
         self._socket.send(message)
 
 
@@ -68,7 +72,7 @@ class MessageHub(object):
         `pusher_type`: for testing purpose ; class to use as pusher which
           writes to the puller port.
         """
-        self._context = zmq.Context()
+        self._context = zmq.Context.instance()
         self._pusher = pusher_type(
             address,
             puller_port,
@@ -115,7 +119,7 @@ class MessageHub(object):
         Process one incomming message (if any) and process all outgoing
         messages (if any).
         """
-        debug = True
+        debug = False
         if (debug):
             print('MessageHub.step()')
             print('_listeners =', self._listeners)
@@ -123,7 +127,7 @@ class MessageHub(object):
         if (debug):
             print('string =', repr(string))
         if (string is not None):
-            message_type, routing_id, raw_message = string.split(b' ', 2)
+            routing_id, message_type, raw_message = string.split(b' ', 2)
             if (debug):
                 print('message_type =', message_type)
                 print('routing_id =', routing_id)
@@ -262,10 +266,10 @@ class Action(object):
         May only called if a proxy was provided to the constructor. Called when
         the message registered to is read.
         """
-        #print('Action.notify({0}, {1}, {2})'.format()
-            #message_type,
-            #routing_id,
-            #message)
+        # print('Action.notify({0}, {1}, {2})'.format(
+            # message_type,
+            # routing_id,
+            # message))
         if (self._proxy.message_type):
             if (self._proxy.message_type != message_type):
                 raise Exception("Expected message type {0} but got {1}".format(
@@ -422,8 +426,8 @@ class Robot(object):
         message.temporary_robot_id = self._robot_id
         message.image = "no image"
         payload = '{0} {1} '.format(
-            Messages.Register.name,
-            self._robot_id).encode()
+            self._robot_id,
+            Messages.Register.name).encode()
         payload += message.SerializeToString()
         self._message_hub.post(payload)
 
@@ -447,6 +451,7 @@ class Robot(object):
         """
         Flag the robot as registered if the server replied with a name.
         """
+        print("Registered")
         self._registered = True
         # this is a hack as we should only register when the game starts
         self._message_hub.register(
@@ -507,7 +512,7 @@ class SocketsLister(object):
         return available_socket
 
     def _discover_bluetooth(self):
-        return None
+        return []
 
 
 class MoveOrder(Enum):
@@ -583,6 +588,27 @@ class EV3Device(object):
         self._socket.send(command)
 
 
+class FakeDevice(object):
+    def __init__(self):
+        pass
+
+    def __del__(self):
+        """
+        Just in case the last order was a move command, stop the robot.
+        """
+        self.stop()
+
+    def move(self, left, right):
+        """
+        `left`: -1..1
+        `right`: -1..1
+        """
+        print("move({left}, {right})".format(left=left, right=right))
+
+    def stop(self):
+        print("stop()")
+
+
 class Program(object):
     def __init__(
             self,
@@ -630,11 +656,11 @@ def main():
     parser.add_argument(
         "-P", "--publisher-port",
         help="Publisher port (the server publish and we subscribe).",
-        default=9001, type=int)
+        default=9000, type=int)
     parser.add_argument(
         "-p", "--puller-port",
         help="Puller port (the server pulls and we push).",
-        default=9000, type=int)
+        default=9001, type=int)
     parser.add_argument(
         "--address",
         help="The server address",
@@ -651,6 +677,8 @@ def main():
             print('Device found for robot', robot)
         else:
             print('Oups, no device to associate to robot', robot)
+            device = FakeDevice()
+            program.add_robot(robot, device)
     while (True):
         program.step()
 
