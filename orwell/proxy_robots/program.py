@@ -32,6 +32,7 @@ class Subscriber(object):
         self._socket = context.socket(zmq.SUB)
         self._socket.setsockopt(zmq.LINGER, 0)
         self._socket.setsockopt_string(zmq.SUBSCRIBE, "")
+        LOGGER.info("Connect to {address} sub".format(address=address))
         self._socket.connect(address)
 
     def read(self):
@@ -46,6 +47,7 @@ class Pusher(object):
         self._socket = context.socket(zmq.PUSH)
         self._socket.setsockopt(zmq.LINGER, 0)
         # print("Pusher ; address =", address)
+        LOGGER.info("Connect to {address} push".format(address=address))
         self._socket.connect(address)
 
     def write(self, message):
@@ -57,12 +59,19 @@ class Replier(object):
     def __init__(self, address, context):
         self._socket = context.socket(zmq.REQ)
         self._socket.setsockopt(zmq.LINGER, 0)
+        LOGGER.info("Connect to {address} req".format(address=address))
         self._socket.connect(address)
 
     def exchange(self, query):
+        self.write(query)
+        return self.read()
+
+    def write(self, message):
         LOGGER.debug("Replier.write: " + repr(query))
-        self._socket.send(query)
-        return self._socket.recv()
+        self._socket.send(message)
+
+    def read(self):
+        return self._socket.recv(flags=zmq.DONTWAIT)
 
 
 class MessageHub(object):
@@ -469,8 +478,7 @@ class Robot(object):
         LOGGER.info("Registered")
         self._registered = True
         # this is a hack as we should only register when the game starts
-        self._message_hub.register(
-            self, Messages.Input.name, self._robot_id)
+        self._message_hub.register(self, Messages.Input.name, self._robot_id)
         # there is no longer a name attribute in Registered
         # if (message.name):
             # self._registered = True
@@ -641,9 +649,9 @@ class Program(object):
         if (not arguments.no_server_broadcast):
             broadcast = Broadcast()
             LOGGER.info(
-                broadcast.push_address +
-                " / " + broadcast.subscribe_address +
-                " / " + broadcast.reply_address)
+                    "push: " + broadcast.push_address +
+                    " / subscribe: " + broadcast.subscribe_address +
+                    " / reply: " + broadcast.reply_address)
             push_address = broadcast.push_address
             subscribe_address = broadcast.subscribe_address
             replier_address = broadcast.reply_address
@@ -656,8 +664,8 @@ class Program(object):
             replier_address = "tcp://{ip}:{port}".format(
                     ip=ip, port=arguments.replier_port)
         self._message_hub = MessageHub(
-            push_address,
             subscribe_address,
+            push_address,
             replier_address,
             subscriber_type,
             pusher_type,
