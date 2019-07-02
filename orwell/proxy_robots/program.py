@@ -9,6 +9,8 @@ from orwell.common.broadcast import Broadcast
 import collections
 from enum import Enum
 import codecs
+import socket
+import threading
 
 decode_hex = codecs.getdecoder("hex_codec")
 
@@ -209,6 +211,37 @@ class Status(Enum):
     successful = 4
 
 
+finished = False
+
+class BroadcastListener(threading.Thread):
+    """
+    """
+    def __init__(self, port=9081):
+        """
+        """
+        threading.Thread.__init__(self)
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket.bind(('', port))
+
+    def run(self):
+        """
+        Call the wrapped function.
+        """
+        while (not finished):
+            sockets = True
+            if (sockets):
+                try:
+                    message, address = self._socket.recvfrom(4096)
+                    LOGGER.info(
+                            "Received UDP broadcast '{message}' from {address}".format(
+                                message=message, address=address))
+                    self._socket.sendto(b"Hello", address)
+                except socket.timeout:
+                    pass
+                except BlockingIOError:
+                    pass
+
+
 class Action(object):
     """
     Object functor to wrap a function and possibly the notification associated
@@ -287,13 +320,13 @@ class Action(object):
             routing_id,
             message):
         """
-        May only called if a proxy was provided to the constructor. Called when
-        the message registered to is read.
+        May only be called if a proxy was provided to the constructor. Called
+        when the message registered to is read.
         """
-        # LOGGER.debug('Action.notify({0}, {1}, {2})'.format(
-            # message_type,
-            # routing_id,
-            # message))
+        LOGGER.debug('Action.notify({0}, {1}, {2})'.format(
+            message_type,
+            routing_id,
+            message))
         if (self._proxy.message_type):
             if (self._proxy.message_type != message_type):
                 raise Exception("Expected message type {0} but got {1}".format(
@@ -672,6 +705,12 @@ class Program(object):
             replier_type)
         self._actionner = Actionner()
         self._robots = {}  # id -> Robot
+        if (not arguments.no_proxy_broadcast):
+            self._broadcast = BroadcastListener(arguments.proxy_broadcast_port)
+            # self._actionner.add_action(action)
+            self._broadcast.start()
+        else:
+            self._broadcast = None
 
     def add_robot(self, robot_id, device=None):
         """
@@ -712,7 +751,7 @@ def main():
         "--server-broadcast-port",
         "-B",
         help="The port for the broadcast on server game",
-        default="9080", type=str)
+        default=9080, type=int)
     parser.add_argument(
         "--no-server-broadcast",
         help="The port for the broadcast on server game",
@@ -722,7 +761,7 @@ def main():
         "--proxy-broadcast-port",
         "-b",
         help="The port for the broadcast on the proxy",
-        default="9081", type=str)
+        default=9081, type=int)
     parser.add_argument(
         "--no-proxy-broadcast",
         help="The port for the broadcast on the proxy",
