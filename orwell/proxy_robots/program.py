@@ -1,11 +1,18 @@
+from __future__ import print_function
 import argparse
 import zmq
+import logging
 import orwell.messages.robot_pb2 as robot_messages
 import orwell.messages.server_game_pb2 as server_game_messages
 import orwell.messages.controller_pb2 as controller_messages
+from orwell.common.broadcast import Broadcast
 import collections
 from enum import Enum
+import codecs
+import socket
+import threading
 
+decode_hex = codecs.getdecoder("hex_codec")
 
 class Messages(Enum):
     Register = 'Register'
@@ -19,28 +26,54 @@ REGISTRY = {
     Messages.Input.name: lambda: controller_messages.Input(),
 }
 
+LOGGER = None
+
 
 class Subscriber(object):
-    def __init__(self, address, port, context):
+    def __init__(self, address, context):
         self._socket = context.socket(zmq.SUB)
         self._socket.setsockopt(zmq.LINGER, 0)
-        self._socket.setsockopt(zmq.SUBSCRIBE, "")
-        url = "tcp://%s:%i" % (address, port)
-        self._socket.connect(url)
+        self._socket.setsockopt_string(zmq.SUBSCRIBE, "")
+        LOGGER.info("Connect to {address} sub".format(address=address))
+        self._socket.connect(address)
 
     def read(self):
-        return self._socket.recv(flags=zmq.DONTWAIT)
+        try:
+            return self._socket.recv(flags=zmq.DONTWAIT)
+        except zmq.error.Again:
+            return None
 
 
 class Pusher(object):
-    def __init__(self, address, port, context):
+    def __init__(self, address, context):
         self._socket = context.socket(zmq.PUSH)
         self._socket.setsockopt(zmq.LINGER, 0)
-        url = "tcp://%s:%i" % (address, port)
-        self._socket.connect(url)
+        # print("Pusher ; address =", address)
+        LOGGER.info("Connect to {address} push".format(address=address))
+        self._socket.connect(address)
 
     def write(self, message):
+        LOGGER.debug("Pusher.write: " + repr(message))
         self._socket.send(message)
+
+
+class Replier(object):
+    def __init__(self, address, context):
+        self._socket = context.socket(zmq.REQ)
+        self._socket.setsockopt(zmq.LINGER, 0)
+        LOGGER.info("Connect to {address} req".format(address=address))
+        self._socket.connect(address)
+
+    def exchange(self, query):
+        self.write(query)
+        return self.read()
+
+    def write(self, message):
+        LOGGER.debug("Replier.write: " + repr(query))
+        self._socket.send(message)
+
+    def read(self):
+        return self._socket.recv(flags=zmq.DONTWAIT)
 
 
 class MessageHub(object):
@@ -51,29 +84,34 @@ class MessageHub(object):
     """
     def __init__(
             self,
-            publisher_port,
-            puller_port,
-            address,
+            publisher_address,
+            pusher_address,
+            replier_address,
             subscriber_type=Subscriber,
-            pusher_type=Pusher):
+            pusher_type=Pusher,
+            replier_type=Replier):
         """
-        `publisher_port`: port to read from.
-        `puller_port`: port to write to.
-        `address`: address used for both reads and writes.
+        `publisher_address`: address to read from.
+        `pusher_address`: address to write to.
+        `replier_address`: address to read replies from.
         `subscriber_type`: for testing purpose ; class to use as a subscriber
-          which reads from the publisher port.
+          which reads from the publisher address.
         `pusher_type`: for testing purpose ; class to use as pusher which
-          writes to the puller port.
+          writes to the puller address.
+        `replier_type`: for testing purpose ; class to use as replier which
+          writes to and reads from the replier address.
         """
-        self._context = zmq.Context()
+        self._context = zmq.Context.instance()
+        # print("MessageHub ; pusher_address =", pusher_address)
         self._pusher = pusher_type(
-            address,
-            puller_port,
-            self._context)
+                pusher_address,
+                self._context)
         self._subscriber = subscriber_type(
-            address,
-            publisher_port,
-            self._context)
+                publisher_address,
+                self._context)
+        self._replier = replier_type(
+                replier_address,
+                self._context)
         self._listeners = collections.defaultdict(list)
         self._outgoing = []
 
@@ -88,7 +126,7 @@ class MessageHub(object):
         Tell that #listener wants to be notified of messages read for type
         #message_type and routind id #routing_id.
         """
-        #print 'MessageHub.register({0}, {1}, {2}'.format(
+        #LOGGER.debug('MessageHub.register({0}, {1}, {2}'.format()
             #listener, message_type, routing_id)
         if ((listener, routing_id) not in self._listeners[message_type]):
             self._listeners[message_type].append((routing_id, listener))
@@ -112,24 +150,21 @@ class MessageHub(object):
         Process one incomming message (if any) and process all outgoing
         messages (if any).
         """
-        debug = True
-        if (debug):
-            print 'MessageHub.step()'
-            print '_listeners =', self._listeners
+        # LOGGER.debug('MessageHub.step()')
+        # LOGGER.debug('_listeners = ' + str(self._listeners))
         string = self._subscriber.read()
-        if (debug):
-            print 'string =', repr(string)
+        # LOGGER.debug('string = ' + repr(string))
         if (string is not None):
-            message_type, routing_id, raw_message = string.split(' ', 2)
-            if (debug):
-                print 'message_type =', message_type
-                print 'routing_id =', routing_id
+            routing_id, message_type, raw_message = string.split(b' ', 2)
+            LOGGER.debug('message_type = ' + str(message_type))
+            LOGGER.debug('routing_id = ' + str(routing_id))
+            message_type = message_type.decode('ascii')
+            routing_id = routing_id.decode('ascii')
             message = REGISTRY[message_type]()
             message.ParseFromString(raw_message)
             for expected_routing_id, listener in self._listeners[message_type]:
-                if (debug):
-                    print 'listener =', listener
-                    print 'expected_routing_id =', expected_routing_id
+                LOGGER.debug('listener = ' + str(listener))
+                LOGGER.debug('expected_routing_id = ' + str(expected_routing_id))
                 if (expected_routing_id):
                     is_expected = True
                 else:
@@ -174,6 +209,37 @@ class Status(Enum):
     failed = 3
     # action successful
     successful = 4
+
+
+finished = False
+
+class BroadcastListener(threading.Thread):
+    """
+    """
+    def __init__(self, port=9081):
+        """
+        """
+        threading.Thread.__init__(self)
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket.bind(('', port))
+
+    def run(self):
+        """
+        Call the wrapped function.
+        """
+        while (not finished):
+            sockets = True
+            if (sockets):
+                try:
+                    message, address = self._socket.recvfrom(4096)
+                    LOGGER.info(
+                            "Received UDP broadcast '{message}' from {address}".format(
+                                message=message, address=address))
+                    self._socket.sendto(b"Hello", address)
+                except socket.timeout:
+                    pass
+                except BlockingIOError:
+                    pass
 
 
 class Action(object):
@@ -254,13 +320,13 @@ class Action(object):
             routing_id,
             message):
         """
-        May only called if a proxy was provided to the constructor. Called when
-        the message registered to is read.
+        May only be called if a proxy was provided to the constructor. Called
+        when the message registered to is read.
         """
-        #print 'Action.notify({0}, {1}, {2})'.format(
-            #message_type,
-            #routing_id,
-            #message)
+        LOGGER.debug('Action.notify({0}, {1}, {2})'.format(
+            message_type,
+            routing_id,
+            message))
         if (self._proxy.message_type):
             if (self._proxy.message_type != message_type):
                 raise Exception("Expected message type {0} but got {1}".format(
@@ -294,9 +360,9 @@ class Actionner(object):
         Check all pending actions to see if a notification has been received.
         Run all the actions that are in the created state.
         """
-        #print 'Actionner.step()'
-        #print '_created_actions =', self._created_actions
-        #print '_pending_actions =', self._pending_actions
+        #LOGGER.debug('Actionner.step()')
+        #LOGGER.debug('_created_actions = ' + str(self._created_actions))
+        #LOGGER.debug('_pending_actions = ' + str(self._pending_actions))
         poper = []
         new_actions = []
         for action in self._pending_actions:
@@ -338,7 +404,7 @@ class Robot(object):
         `device`: deviced used to communicate with the robot.
         """
         self._robot_id = robot_id
-        self._name = ''
+        # self._name = ''
         self._message_hub = message_hub
         self._actionner = actionner
         self._device = device
@@ -356,9 +422,9 @@ class Robot(object):
     def robot_id(self):
         return self._robot_id
 
-    @property
-    def name(self):
-        return self._name
+    # @property
+    # def name(self):
+        # return self._name
 
     @property
     def left(self):
@@ -396,7 +462,7 @@ class Robot(object):
         Create an action that will take care of registering the robot and
         dispatch the notification.
         """
-        #print 'queue_register'
+        #LOGGER.debug('queue_register')
         proxy = Proxy(
             self._message_hub,
             self.notify,
@@ -414,11 +480,12 @@ class Robot(object):
         Post a message to ask for the registration of the robot.
         """
         message = REGISTRY[Messages.Register.name]()
-        message.robot_id = self._robot_id
-        payload = '{0} {1} {2}'.format(
-            Messages.Register.name,
+        message.temporary_robot_id = self._robot_id
+        message.image = "no image"
+        payload = '{0} {1} '.format(
             self._robot_id,
-            message.SerializeToString())
+            Messages.Register.name).encode()
+        payload += message.SerializeToString()
         self._message_hub.post(payload)
 
     def notify(
@@ -441,21 +508,26 @@ class Robot(object):
         """
         Flag the robot as registered if the server replied with a name.
         """
-        if (message.name):
-            self._registered = True
-            self._name = message.name
-            #print 'Robot registered (robot_id = {0} ; name = {1})'.format(
-                #self._robot_id,
-                #self._name)
-            # this is a hack as we should only register when the game starts
-            self._message_hub.register(
-                self, Messages.Input.name, self._robot_id)
+        LOGGER.info("Registered")
+        self._registered = True
+        # this is a hack as we should only register when the game starts
+        self._message_hub.register(self, Messages.Input.name, self._robot_id)
+        # there is no longer a name attribute in Registered
+        # if (message.name):
+            # self._registered = True
+            # self._name = message.name
+            # #LOGGER.debug('Robot registered (robot_id = {0} ; name = {1})'.format(
+                # #self._robot_id,
+                # #self._name))
+            # # this is a hack as we should only register when the game starts
+            # self._message_hub.register(
+                # self, Messages.Input.name, self._robot_id)
 
     def _notify_input(self, message):
         """
         Make the robot move.
         """
-        print '_notify_input({0})'.format(message)
+        LOGGER.debug('_notify_input({0})'.format(message))
         self._left = message.move.left
         self._right = message.move.right
         self._fire1 = message.fire.weapon1
@@ -496,24 +568,7 @@ class SocketsLister(object):
         return available_socket
 
     def _discover_bluetooth(self):
-        import bluetooth
-        import pprint
-        pp = pprint.PrettyPrinter(indent=4)
-        usable_sockets = []
-        devices = bluetooth.discover_devices()
-        for device in devices:
-            service = bluetooth.find_service(address=device)
-            if (service):
-                info_map = service[0]
-                pp.pprint(info_map)
-                protocol = info_map['protocol']
-                if ('RFCOMM' == protocol):
-                    socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-                    host = info_map['host']
-                    port = info_map['port']
-                    socket.connect((host, port))
-                    usable_sockets.append(socket)
-        return usable_sockets
+        return []
 
 
 class MoveOrder(Enum):
@@ -561,7 +616,7 @@ class EV3Device(object):
             order = "A4"
         command = "0C000000800000" + order + "00"\
             + str_motor + str_power + "A600" + str_motor
-        return command.decode('hex')
+        return decode_hex(command)
 
     def get_stop_command(self, motor):
         """
@@ -569,7 +624,7 @@ class EV3Device(object):
         """
         str_motor = "{0:02d}".format(motor)
         command = "09000000800000A300" + str_motor + "00"
-        return command.decode('hex')
+        return decode_hex(command)
 
     def move(self, left, right):
         """
@@ -589,26 +644,73 @@ class EV3Device(object):
         self._socket.send(command)
 
 
+class FakeDevice(object):
+    def __init__(self):
+        pass
+
+    def __del__(self):
+        """
+        Just in case the last order was a move command, stop the robot.
+        """
+        self.stop()
+
+    def move(self, left, right):
+        """
+        `left`: -1..1
+        `right`: -1..1
+        """
+        LOGGER.debug("move({left}, {right})".format(left=left, right=right))
+
+    def stop(self):
+        LOGGER.debug("stop()")
+
+
 class Program(object):
     def __init__(
             self,
             arguments,
             subscriber_type=Subscriber,
-            pusher_type=Pusher):
+            pusher_type=Pusher,
+            replier_type=Replier):
         """
         `arguments`: object that must at least contain publisher_port,
-            puller_port, address.
+            puller_port, address. (not any longer with the broadcast)
         `subscriber_type`: see #MessageHub
         `pusher_type`: see #MessageHub
+        `replier_type`: see #MessageHub
         """
+        if (not arguments.no_server_broadcast):
+            broadcast = Broadcast()
+            LOGGER.info(
+                    "push: " + broadcast.push_address +
+                    " / subscribe: " + broadcast.subscribe_address +
+                    " / reply: " + broadcast.reply_address)
+            push_address = broadcast.push_address
+            subscribe_address = broadcast.subscribe_address
+            replier_address = broadcast.reply_address
+        else:
+            ip = arguments.address
+            push_address = "tcp://{ip}:{port}".format(
+                    ip=ip, port=arguments.puller_port)
+            subscribe_address = "tcp://{ip}:{port}".format(
+                    ip=ip, port=arguments.publisher_port)
+            replier_address = "tcp://{ip}:{port}".format(
+                    ip=ip, port=arguments.replier_port)
         self._message_hub = MessageHub(
-            arguments.publisher_port,
-            arguments.puller_port,
-            arguments.address,
+            subscribe_address,
+            push_address,
+            replier_address,
             subscriber_type,
-            pusher_type)
+            pusher_type,
+            replier_type)
         self._actionner = Actionner()
         self._robots = {}  # id -> Robot
+        if (not arguments.no_proxy_broadcast):
+            self._broadcast = BroadcastListener(arguments.proxy_broadcast_port)
+            # self._actionner.add_action(action)
+            self._broadcast.start()
+        else:
+            self._broadcast = None
 
     def add_robot(self, robot_id, device=None):
         """
@@ -628,7 +730,7 @@ class Program(object):
         """
         self._actionner.step()
         self._message_hub.step()
-        map(lambda robot: robot.step(), self._robots.itervalues())
+        map(lambda robot: robot.step(), self._robots.values())
 
 
 def main():
@@ -636,16 +738,42 @@ def main():
     parser.add_argument(
         "-P", "--publisher-port",
         help="Publisher port (the server publish and we subscribe).",
-        default=9001, type=int)
+        default=9000, type=int)
     parser.add_argument(
         "-p", "--puller-port",
         help="Puller port (the server pulls and we push).",
-        default=9000, type=int)
+        default=9001, type=int)
     parser.add_argument(
         "--address",
         help="The server address",
         default="127.0.0.1", type=str)
+    parser.add_argument(
+        "--server-broadcast-port",
+        "-B",
+        help="The port for the broadcast on server game",
+        default=9080, type=int)
+    parser.add_argument(
+        "--no-server-broadcast",
+        help="The port for the broadcast on server game",
+        default=False,
+        action="store_true")
+    parser.add_argument(
+        "--proxy-broadcast-port",
+        "-b",
+        help="The port for the broadcast on the proxy",
+        default=9081, type=int)
+    parser.add_argument(
+        "--no-proxy-broadcast",
+        help="The port for the broadcast on the proxy",
+        default=False,
+        action="store_true")
+    parser.add_argument(
+        '--verbose', '-v',
+        help='Verbose mode',
+        default=False,
+        action="store_true")
     arguments = parser.parse_args()
+    configure_logging(arguments.verbose)
     sockets_lister = SocketsLister()
     robots = ['951']
     program = Program(arguments)
@@ -654,11 +782,30 @@ def main():
         if (socket):
             device = EV3Device(socket)
             program.add_robot(robot, device)
-            print 'Device found for robot', robot
+            LOGGER.info('Device found for robot ' + str(robot))
         else:
-            print 'Oups, no device to associate to robot', robot
+            LOGGER.info('Oups, no device to associate to robot ' + str(robot))
+            device = FakeDevice()
+            program.add_robot(robot, device)
     while (True):
         program.step()
+
+
+def configure_logging(verbose):
+    print("program.configure_logging")
+    logger = logging.getLogger("orwell")
+    logger.propagate = False
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+            '%(asctime)s %(name)-12s %(levelname)-8s %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    if (verbose):
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
+    global LOGGER
+    LOGGER = logging.getLogger("orwell.proxy_robot")
 
 if ("__main__" == __name__):
     main()
