@@ -112,6 +112,7 @@ class MessageHub(object):
         self._replier = replier_type(
                 replier_address,
                 self._context)
+        self._robot_sockets = []
         self._listeners = collections.defaultdict(list)
         self._outgoing = []
 
@@ -145,6 +146,9 @@ class MessageHub(object):
         """
         self._outgoing.append(payload)
 
+    def add_robot_socket(self, robot_socket):
+        self._robot_sockets.append(robot_socket)
+
     def step(self):
         """
         Process one incomming message (if any) and process all outgoing
@@ -160,20 +164,39 @@ class MessageHub(object):
             LOGGER.debug('routing_id = ' + str(routing_id))
             message_type = message_type.decode('ascii')
             routing_id = routing_id.decode('ascii')
-            message = REGISTRY[message_type]()
-            message.ParseFromString(raw_message)
-            for expected_routing_id, listener in self._listeners[message_type]:
-                LOGGER.debug('listener = ' + str(listener))
-                LOGGER.debug('expected_routing_id = ' + str(expected_routing_id))
-                if (expected_routing_id):
-                    is_expected = True
-                else:
-                    is_expected = (expected_routing_id == routing_id)
-                if (is_expected):
-                    listener.notify(message_type, routing_id, message)
+            if (message_type in REGISTRY):
+                message = REGISTRY[message_type]()
+                message.ParseFromString(raw_message)
+                for expected_routing_id, listener in \
+                        self._listeners[message_type]:
+                    LOGGER.debug('listener = ' + str(listener))
+                    LOGGER.debug(
+                            'expected_routing_id = ' +
+                            str(expected_routing_id))
+                    if (expected_routing_id):
+                        is_expected = True
+                    else:
+                        is_expected = (expected_routing_id == routing_id)
+                    if (is_expected):
+                        listener.notify(message_type, routing_id, message)
         for payload in self._outgoing:
             self._pusher.write(payload)
         del self._outgoing[:]
+        # read messages from the robot
+        for robot_socket in self._robot_sockets:
+            found = True
+            while (found):
+                try:
+                    message, address = robot_socket.recvfrom(4096)
+                    LOGGER.debug(
+                            "Message from robot: {message}".format(
+                                message=message))
+                except socket.timeout:
+                    pass
+                    found = False
+                except BlockingIOError:
+                    pass
+                    found = False
 
 
 class Proxy(object):
@@ -220,26 +243,33 @@ class BroadcastListener(threading.Thread):
         """
         """
         threading.Thread.__init__(self)
+        self._socket_ports = []
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket.bind(('', port))
 
+    def add_socket_port(self, socket_port):
+        self._socket_ports.append(socket_port)
+
     def run(self):
         """
-        Call the wrapped function.
         """
         while (not finished):
-            sockets = True
-            if (sockets):
-                try:
-                    message, address = self._socket.recvfrom(4096)
-                    LOGGER.info(
-                            "Received UDP broadcast '{message}' from {address}".format(
-                                message=message, address=address))
-                    self._socket.sendto(b"Hello", address)
-                except socket.timeout:
-                    pass
-                except BlockingIOError:
-                    pass
+            try:
+                message, address = self._socket.recvfrom(4096)
+                LOGGER.info(
+                        "Received UDP broadcast '{message}' "
+                        "from {address}".format(
+                            message=message, address=address))
+                if (self._socket_ports):
+                    port = self._socket_ports.pop(0)
+                    data = b"{local_port}".format(local_port=port)
+                else:
+                    data = b"Goodbye"
+                self._socket.sendto(data, address)
+            except socket.timeout:
+                pass
+            except BlockingIOError:
+                pass
 
 
 class Action(object):
@@ -544,18 +574,23 @@ class SocketsLister(object):
     """
     Class that for now lists bluetooth device and open the matching sockets.
     """
-    def __init__(self):
+    def __init__(self, socket_count=1):
         self._sockets = []
-        self._sockets += self._discover_bluetooth()
-        self._busy_map = [False for _ in self._sockets]
+        self._used_sockets = set()
+        for i in range(socket_count):
+            sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
+            sock.setblocking(False)
+            sock.bind(("", 0))
+            self._sockets.append(sock)
 
-    # maybe the socket object does it itself
-    #def __del__(self):
-        #"""
-        #Make sure we close all the sockets.
-        #"""
-        #for socket in self._sockets:
-            #socket.close()
+    def __del__(self):
+        """
+        Make sure we close all the sockets.
+        """
+        for sock in self._sockets:
+            sock.close()
+        for sock in self._used_sockets:
+            sock.close()
 
     def pop_available_socket(self):
         """
@@ -565,10 +600,8 @@ class SocketsLister(object):
         available_socket = None
         if (self._sockets):
             available_socket = self._sockets.pop(0)
+            self._used_sockets.add(available_socket)
         return available_socket
-
-    def _discover_bluetooth(self):
-        return []
 
 
 class MoveOrder(Enum):
@@ -665,6 +698,33 @@ class FakeDevice(object):
         LOGGER.debug("stop()")
 
 
+class HarpiDevice(object):
+    def __init__(self, socket):
+        self._socket = socket
+        self._file = self._socket.makefile()
+
+    def __del__(self):
+        """
+        Just in case the last order was a move command, stop the robot.
+        """
+        self.stop()
+
+    def move(self, left, right):
+        """
+        `left`: -1..1
+        `right`: -1..1
+        """
+        LOGGER.debug("harpi::move({left}, {right})".format(left=left, right=right))
+        self._file.write("move {left} {right}".format(left=left, right=right))
+
+    def stop(self):
+        LOGGER.debug("stop()")
+        self.move(0, 0)
+
+    def get_socket(self):
+        return self._socket
+
+
 class Program(object):
     def __init__(
             self,
@@ -708,7 +768,6 @@ class Program(object):
         if (not arguments.no_proxy_broadcast):
             self._broadcast = BroadcastListener(arguments.proxy_broadcast_port)
             # self._actionner.add_action(action)
-            self._broadcast.start()
         else:
             self._broadcast = None
 
@@ -718,6 +777,13 @@ class Program(object):
         """
         robot = Robot(robot_id, self._message_hub, self._actionner, device)
         self._robots[robot_id] = robot
+        robot_socket = device.get_socket()
+        self._message_hub.add_robot_socket(robot_socket)
+        port = robot_socket.getsockname()[1]
+        LOGGER.info(
+                "Robot {id} is using port {port}".format(
+                    id=robot_id, port=port))
+        self._broadcast.add_socket_port(port)
         robot.queue_register()
 
     @property
@@ -732,6 +798,12 @@ class Program(object):
         self._message_hub.step()
         map(lambda robot: robot.step(), self._robots.values())
 
+    def start(self):
+        """
+        This should be called once the robots have been added.
+        """
+        if (self._broadcast):
+            self._broadcast.start()
 
 def main():
     parser = argparse.ArgumentParser()
@@ -780,13 +852,14 @@ def main():
     for robot in robots:
         socket = sockets_lister.pop_available_socket()
         if (socket):
-            device = EV3Device(socket)
+            device = HarpiDevice(socket)
             program.add_robot(robot, device)
             LOGGER.info('Device found for robot ' + str(robot))
         else:
             LOGGER.info('Oups, no device to associate to robot ' + str(robot))
             device = FakeDevice()
             program.add_robot(robot, device)
+    program.start()
     while (True):
         program.step()
 
@@ -797,7 +870,8 @@ def configure_logging(verbose):
     logger.propagate = False
     handler = logging.StreamHandler()
     formatter = logging.Formatter(
-            '%(asctime)s %(name)-12s %(levelname)-8s %(message)s')
+            '%(asctime)s %(name)-12s %(levelname)-8s '
+            '%(filename)s %(lineno)d %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     if (verbose):
