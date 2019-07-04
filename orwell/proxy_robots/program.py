@@ -542,6 +542,7 @@ class Robot(object):
         """
         LOGGER.info("Registered")
         self._registered = True
+        self._robot_id = message.robot_id
         # this is a hack as we should only register when the game starts
         self._message_hub.register(self, Messages.Input.name, self._robot_id)
         # there is no longer a name attribute in Registered
