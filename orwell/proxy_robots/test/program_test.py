@@ -31,6 +31,9 @@ class FakeDevice(object):
         assert_equals(expected_left, left)
         assert_equals(expected_right, right)
 
+    def get_socket(self):
+        return FakeSocket([], ["FakeDevice/FakeSocket"])
+
 
 ROBOT_DESCRIPTORS = [('951', 'Grenade', FakeDevice('951'))]
 
@@ -41,6 +44,8 @@ class FakeArguments(object):
     replier_port = 3
     address = '1.2.3.4'
     no_server_broadcast = True
+    no_proxy_broadcast = False
+    proxy_broadcast_port = 0
 
 
 class MockPusher(object):
@@ -103,12 +108,30 @@ class MockReplier(object):
         return None
 
 
+import threading
+import socket
+
+class FakeRobot(threading.Thread):
+    def __init__(self, port=9081):
+        """
+        """
+        threading.Thread.__init__(self)
+        self._port = port
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    def run(self):
+        print("FakeRobot::run -> send to {port}".format(port=self._port))
+        self._socket.sendto(b"robot", ('127.0.0.1', self._port))
+
+
 def test_robot_registration():
     print("\ntest_robot_registration")
     arguments = FakeArguments()
     program = opp.Program(arguments, MockSubscriber, MockPusher, MockReplier)
     for robot_id, _, device in ROBOT_DESCRIPTORS:
         program.add_robot(robot_id, device)
+    # fake_robot = FakeRobot()
+    # fake_robot.start()
     program.step()
     program.step()
     for item, expected in zip(program.robots.items(), ROBOT_DESCRIPTORS):
@@ -160,6 +183,8 @@ class DummyDevice(object):
         assert_equals(INPUT_MOVE[1], right)
         self._moved = True
 
+    def get_socket(self):
+        return FakeSocket([], ["DummyDevice/FakeSocket"])
 
 INPUT_ROBOT_DESCRIPTOR = ('55', 'Jambon', DummyDevice('55'))
 
@@ -272,8 +297,12 @@ def test_robot_input():
 
 
 class FakeSocket(object):
-    def __init__(self, expected_content_list):
+    def __init__(self, expected_content_list, recvfrom_list, address="127.0.0.1", port="42"):
+        print("FakeSocket({0}, {1}, {2})".format(expected_content_list, address, port))
         self._expected_content_list = expected_content_list
+        self._address = address
+        self._port = port
+        self._recvfrom_list = recvfrom_list
 
     def __del__(self):
         #assert_equals(0, len(self._expected_content_list))
@@ -286,6 +315,17 @@ class FakeSocket(object):
         expected_content = self._expected_content_list.pop(0)
         #assert_equals(expected_content, content)
 
+    def getsockname(self):
+        print("FakeSocket::getsockname")
+        return [self._address, self._port]
+
+    def recvfrom(self, size):
+        # print("FakeSocket::recvfrom")
+        if (self._recvfrom_list):
+            item = self._recvfrom_list.pop(0)
+        else:
+            item = None
+        return (item, self._address)
 
 def test_fake_socket():
     robots = ['951']
@@ -295,7 +335,8 @@ def test_fake_socket():
         socket = FakeSocket(
             ['\x0c\x00\x00\x00\x80\x00\x00\xa4\x00\x01\x1f\xa6\x00\x01',
              '\x0c\x00\x00\x00\x80\x00\x00\xa4\x00\x08\x1f\xa6\x00\x08',
-             '\t\x00\x00\x00\x80\x00\x00\xa3\x00\t\x00'])
+             '\t\x00\x00\x00\x80\x00\x00\xa3\x00\t\x00'],
+            ["test_fake_socket/FakeSocket"])
         device = opp.EV3Device(socket)
         program.add_robot(robot, device)
         device.move(1, 1)

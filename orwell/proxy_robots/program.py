@@ -191,6 +191,8 @@ class MessageHub(object):
                     LOGGER.debug(
                             "Message from robot: {message}".format(
                                 message=message))
+                    if (not message):
+                        found = False
                 except socket.timeout:
                     pass
                     found = False
@@ -675,6 +677,9 @@ class EV3Device(object):
     def stop(self):
         command = self.get_stop_command(Motors.A.value + Motors.D.value)
         self._socket.send(command)
+
+    def get_socket(self):
+        return self._socket
 
 
 class FakeDevice(object):
