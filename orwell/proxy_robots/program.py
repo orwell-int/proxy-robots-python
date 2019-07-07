@@ -12,6 +12,9 @@ import codecs
 import socket
 import threading
 
+LOCK = threading.Lock()
+LOCK_SOCKET = threading.Lock()
+
 decode_hex = codecs.getdecoder("hex_codec")
 
 class Messages(Enum):
@@ -112,7 +115,6 @@ class MessageHub(object):
         self._replier = replier_type(
                 replier_address,
                 self._context)
-        self._robot_sockets = []
         self._listeners = collections.defaultdict(list)
         self._outgoing = []
 
@@ -146,8 +148,6 @@ class MessageHub(object):
         """
         self._outgoing.append(payload)
 
-    def add_robot_socket(self, robot_socket):
-        self._robot_sockets.append(robot_socket)
 
     def step(self):
         """
@@ -160,8 +160,6 @@ class MessageHub(object):
         # LOGGER.debug('string = ' + repr(string))
         if (string is not None):
             routing_id, message_type, raw_message = string.split(b' ', 2)
-            LOGGER.debug('message_type = ' + str(message_type))
-            LOGGER.debug('routing_id = ' + str(routing_id))
             message_type = message_type.decode('ascii')
             routing_id = routing_id.decode('ascii')
             if (message_type in REGISTRY):
@@ -182,23 +180,6 @@ class MessageHub(object):
         for payload in self._outgoing:
             self._pusher.write(payload)
         del self._outgoing[:]
-        # read messages from the robot
-        for robot_socket in self._robot_sockets:
-            found = True
-            while (found):
-                try:
-                    message, address = robot_socket.recvfrom(4096)
-                    LOGGER.debug(
-                            "Message from robot: {message}".format(
-                                message=message))
-                    if (not message):
-                        found = False
-                except socket.timeout:
-                    pass
-                    found = False
-                except BlockingIOError:
-                    pass
-                    found = False
 
 
 class Proxy(object):
@@ -256,22 +237,30 @@ class BroadcastListener(threading.Thread):
         """
         """
         while (not finished):
+            message = None
             try:
                 message, address = self._socket.recvfrom(4096)
-                LOGGER.info(
-                        "Received UDP broadcast '{message}' "
-                        "from {address}".format(
-                            message=message, address=address))
-                if (self._socket_ports):
-                    port = self._socket_ports.pop(0)
-                    data = b"{local_port}".format(local_port=port)
-                else:
-                    data = b"Goodbye"
-                self._socket.sendto(data, address)
             except socket.timeout:
                 pass
             except BlockingIOError:
                 pass
+            if (message):
+                try:
+                    LOGGER.info(
+                            "Received UDP broadcast '{message}' "
+                            "from {address}".format(
+                                message=message, address=address))
+                    if (self._socket_ports):
+                        port = self._socket_ports.pop(0)
+                        data = bytearray("{local_port}".format(local_port=port), "ascii")
+                    else:
+                        data = b"Goodbye"
+                    LOGGER.info("Try to send response to broadcast:{data}".format(data=data))
+                    self._socket.sendto(data, address)
+                except socket.timeout:
+                    LOGGER.info("Tried to send response but socket.timeout occurred")
+                except BlockingIOError:
+                    LOGGER.info("Tried to send response but BlockingIOError occurred")
 
 
 class Action(object):
@@ -475,12 +464,13 @@ class Robot(object):
         return self._fire2
 
     def step(self):
-        if ((self._previous_left != self._left) or
-                (self._previous_right != self._right)):
-            if (self._device):
-                self._device.move(self._left, self._right)
-            self._previous_left = self._left
-            self._previous_right = self._right
+        if (self._device.ready()):
+            if ((self._previous_left != self._left) or
+                    (self._previous_right != self._right)):
+                if (self._device):
+                    self._device.move(self._left, self._right)
+                self._previous_left = self._left
+                self._previous_right = self._right
 
     @property
     def registered(self):
@@ -682,6 +672,9 @@ class EV3Device(object):
     def get_socket(self):
         return self._socket
 
+    def ready(self):
+        return True
+
 
 class FakeDevice(object):
     def __init__(self):
@@ -703,11 +696,14 @@ class FakeDevice(object):
     def stop(self):
         LOGGER.debug("stop()")
 
+    def ready(self):
+        return True
+
 
 class HarpiDevice(object):
     def __init__(self, socket):
         self._socket = socket
-        self._file = self._socket.makefile()
+        self._address = None
 
     def __del__(self):
         """
@@ -720,8 +716,14 @@ class HarpiDevice(object):
         `left`: -1..1
         `right`: -1..1
         """
-        LOGGER.debug("harpi::move({left}, {right})".format(left=left, right=right))
-        self._file.write("move {left} {right}".format(left=left, right=right))
+        if (self._address):
+            left = int(left * 255)
+            right = int(right * 255)
+            command = "move {left} {right}".format(left=left, right=right)
+            LOGGER.debug("harpi::" + command)
+            self._socket.sendto(bytearray(command, "ascii"), self._address)
+        else:
+            LOGGER.debug("harpi::move device not ready to send command")
 
     def stop(self):
         LOGGER.debug("stop()")
@@ -729,6 +731,34 @@ class HarpiDevice(object):
 
     def get_socket(self):
         return self._socket
+
+    def ready(self):
+        if (not self._address):
+            try:
+                message, address = self._socket.recvfrom(4096)
+                if (message):
+                    LOGGER.info(
+                            "First message from robot: {message}".format(
+                                message=message))
+                    self._address = address
+            except socket.timeout:
+                LOGGER.debug("Failed to receive first mesage from robot - socket.timeout")
+                pass
+            except BlockingIOError:
+                # no message yet?
+                pass
+        else:
+            try:
+                message, address = self._socket.recvfrom(4096)
+                if (message):
+                    LOGGER.info(
+                            "Message from robot: {message}".format(
+                                message=message))
+            except socket.timeout:
+                pass
+            except BlockingIOError:
+                pass
+        return self._address is not None
 
 
 class Program(object):
@@ -784,7 +814,6 @@ class Program(object):
         robot = Robot(robot_id, self._message_hub, self._actionner, device)
         self._robots[robot_id] = robot
         robot_socket = device.get_socket()
-        self._message_hub.add_robot_socket(robot_socket)
         port = robot_socket.getsockname()[1]
         LOGGER.info(
                 "Robot {id} is using port {port}".format(
@@ -802,7 +831,8 @@ class Program(object):
         """
         self._actionner.step()
         self._message_hub.step()
-        map(lambda robot: robot.step(), self._robots.values())
+        for robot in self._robots.values():
+            robot.step()
 
     def start(self):
         """
