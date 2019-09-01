@@ -1,49 +1,69 @@
 from __future__ import print_function
 import socket
 import struct
-import sys
 import logging
-# @TODO ? implement proper broadcast address finding
-# import netifaces
+import netifaces
 
 
 LOGGER = logging.getLogger(__name__)
 
-def get_network_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    s.connect(('<broadcast>', 0))
-    return s.getsockname()[0]
+
+def get_network_ips():
+    results = []
+    for interface in netifaces.interfaces():
+        addresses = netifaces.ifaddresses(interface)
+        if netifaces.AF_INET not in addresses:
+            continue
+        ipv4_addresses = addresses[netifaces.AF_INET]
+        if not ipv4_addresses:
+            continue
+        for ipv4_address in ipv4_addresses:
+            if "broadcast" not in ipv4_address:
+                continue
+            results.append(ipv4_address["broadcast"])
+    return results[::-1]
 
 
 class Broadcast(object):
-    def __init__(self, port=9080, retries=5, timeout=10):
-        ip_mask_all = '255'
+    def __init__(self, port=9080, retries=2, timeout=3):
+        self._port = port
         self._size = 512
         self._retries = retries
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        self._socket.settimeout(timeout)
-        ttl = struct.pack('b', 1)
-        self._socket.setsockopt(
-            socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
-        broadcast = get_network_ip().split('.')
-        broadcast = '.'.join(broadcast[:-1] + [ip_mask_all])
-        self._group = (broadcast, port)
-        LOGGER.debug('group = ' + str(self._group))
+        self._timeout = timeout
+        self._build_socket()
+        self._ips_pool = get_network_ips()
+        self._group = self._get_next_group()
         self._received = False
         self._data = None
         self._sender = None
-        self._decding_successful = False
+        self._decoding_successful = False
         self.send_all_broadcast_messages()
 
+    def _build_socket(self):
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self._socket.settimeout(self._timeout)
+        ttl = struct.pack('b', 1)
+        self._socket.setsockopt(
+            socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
+
+    def _get_next_group(self):
+        broadcast = self._ips_pool.pop()
+        group = broadcast, self._port
+        LOGGER.debug('group = ' + str(group))
+        return group
+
     def send_all_broadcast_messages(self):
-        tries = 0
-        while ((tries < self._retries) and (not self._received)):
-            self.send_one_broadcast_message()
-            tries += 1
-        if (self._received):
-            self.decode_data()
+        while (True):
+            tries = 0
+            while ((tries < self._retries) and (not self._received)):
+                tries += 1
+                LOGGER.debug("Try " + str(tries))
+                self.send_one_broadcast_message()
+            if (self._received):
+                self.decode_data()
+            else:
+                self._group = self._get_next_group()
 
     def send_one_broadcast_message(self):
         try:
@@ -66,6 +86,7 @@ class Broadcast(object):
         finally:
             LOGGER.info('closing socket')
             self._socket.close()
+            self._build_socket()
 
     def decode_data(self):
         # data (split on multiple lines for clarity):
@@ -102,7 +123,7 @@ class Broadcast(object):
         self._push_address = puller_address.replace('*', sender_ip)
         self._subscribe_address = publisher_address.replace('*', sender_ip)
         self._reply_address = replier_address.replace('*', sender_ip)
-        self._decding_successful = True
+        self._decoding_successful = True
 
     @property
     def push_address(self):
