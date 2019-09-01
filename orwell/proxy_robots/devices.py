@@ -22,73 +22,6 @@ class Motors(Enum):
     D = 8
 
 
-class EV3Device(object):
-    def __init__(self, socket):
-        assert(socket is not None)
-        self._socket = socket
-
-    def __del__(self):
-        """
-        Just in case the last order was a move command, stop the robot.
-        """
-        self.stop()
-        #self._socket.close()
-
-    def get_move_command(self, motor, power, move=MoveOrder.POWER, safe=True):
-        """
-        `motor`: Motors enum (can be a sum)
-        `power`: -31..31
-        """
-        str_motor = "{0:02d}".format(motor)
-        if (safe):
-            converted_power = max(-31, min(31, power))
-            if (converted_power < 0):
-                converted_power = 64 + converted_power
-        else:
-            converted_power = power
-        str_power = hex(converted_power)[2:].zfill(2)
-        if (MoveOrder.POWER == move):
-            order = "A4"
-        elif (MoveOrder.SPEED == move):
-            order = "A5"
-        else:
-            order = "A4"
-        command = "0C000000800000" + order + "00"\
-            + str_motor + str_power + "A600" + str_motor
-        return decode_hex(command)
-
-    def get_stop_command(self, motor):
-        """
-        `motor`: Motors enum (can be a sum)
-        """
-        str_motor = "{0:02d}".format(motor)
-        command = "09000000800000A300" + str_motor + "00"
-        return decode_hex(command)
-
-    def move(self, left, right):
-        """
-        `left`: -1..1
-        `right`: -1..1
-        """
-        # 31 is a magic number comming from trial and error
-        scaled_left = int(float(left) * float(31))
-        scaled_right = int(float(right) * float(31))
-        command = self.get_move_command(Motors.A.value, scaled_left)
-        self._socket.send(command)
-        command = self.get_move_command(Motors.D.value, scaled_right)
-        self._socket.send(command)
-
-    def stop(self):
-        command = self.get_stop_command(Motors.A.value + Motors.D.value)
-        self._socket.send(command)
-
-    def get_socket(self):
-        return self._socket
-
-    def ready(self):
-        return True
-
-
 class FakeDevice(object):
     def __init__(self):
         pass
@@ -105,6 +38,13 @@ class FakeDevice(object):
         `right`: -1..1
         """
         LOGGER.debug("move({left}, {right})".format(left=left, right=right))
+
+    def fire(self, fire1, fire2):
+        """
+        `fire1`: 0/1
+        `fire2`: 0/1
+        """
+        LOGGER.debug("fire({fire1}, {fire2})".format(fire1=fire1, fire2=fire2))
 
     def stop(self):
         LOGGER.debug("stop()")
@@ -138,6 +78,20 @@ class HarpiDevice(object):
         else:
             LOGGER.debug("harpi::move device not ready to send command")
 
+    def fire(self, fire1, fire2):
+        """
+        `fire1`: 0/1
+        `fire2`: 0/1
+        """
+        if self._address:
+            fire1 = 1 if fire1 else 0
+            fire2 = 1 if fire2 else 0
+            command = "fire {fire1} {fire2})".format(fire1=fire1, fire2=fire2)
+            LOGGER.debug("harpi::" + command)
+            self._socket.sendto(bytearray(command, "ascii"), self._address)
+        else:
+            LOGGER.debug("harpi::fire device not ready to send command")
+
     def stop(self):
         LOGGER.debug("stop()")
         self.move(0, 0)
@@ -155,7 +109,7 @@ class HarpiDevice(object):
                                 message=message))
                     self._address = address
             except socket.timeout:
-                LOGGER.debug("Failed to receive first mesage from robot - socket.timeout")
+                LOGGER.debug("Failed to receive first message from robot - socket.timeout")
                 pass
             except BlockingIOError:
                 # no message yet?

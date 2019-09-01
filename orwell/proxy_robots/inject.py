@@ -31,6 +31,7 @@ class Program(object):
             # self._actionner.add_action(action)
         else:
             self._broadcast = None
+        self._fire_pattern = False
 
     def add_robot(self, robot_id, device):
         """
@@ -53,6 +54,11 @@ class Program(object):
         for device in self._devices.values():
             if device.ready():
                 device.move(-0.8, 0.9)
+                if self._fire_pattern:
+                    device.fire(True, False)
+                else:
+                    device.fire(False, True)
+                self._fire_pattern = not self._fire_pattern
 
     def start(self):
         """
@@ -95,7 +101,7 @@ def main():
     program.start()
     while (True):
         program.step()
-        time.sleep(10)
+        time.sleep(5)
 
 
 def configure_logging(verbose):

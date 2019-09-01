@@ -151,7 +151,7 @@ class MessageHub(object):
 
     def step(self):
         """
-        Process one incomming message (if any) and process all outgoing
+        Process one incoming message (if any) and process all outgoing
         messages (if any).
         """
         # LOGGER.debug('MessageHub.step()')
@@ -163,6 +163,7 @@ class MessageHub(object):
             message_type = message_type.decode('ascii')
             routing_id = routing_id.decode('ascii')
             if (message_type in REGISTRY):
+                LOGGER.debug('message known = ' + repr(message_type))
                 message = REGISTRY[message_type]()
                 message.ParseFromString(raw_message)
                 for expected_routing_id, listener in \
@@ -177,6 +178,8 @@ class MessageHub(object):
                         is_expected = (expected_routing_id == routing_id)
                     if (is_expected):
                         listener.notify(message_type, routing_id, message)
+            else:
+                LOGGER.debug('message NOT known = ' + repr(message_type))
         for payload in self._outgoing:
             self._pusher.write(payload)
         del self._outgoing[:]
@@ -418,13 +421,17 @@ class Robot(object):
         return self._fire2
 
     def step(self):
-        if (self._device.ready()):
+        if self._device.ready():
             if ((self._previous_left != self._left) or
                     (self._previous_right != self._right)):
-                if (self._device):
-                    self._device.move(self._left, self._right)
+                self._device.move(self._left, self._right)
                 self._previous_left = self._left
                 self._previous_right = self._right
+            if ((self._previous_fire1 != self._fire1) or
+                    (self._previous_fire2 != self._fire2)):
+                self._device.fire(self._fire1, self._fire2)
+                self._previous_fire1 = self._fire1
+                self._previous_fire2 = self._fire2
 
     @property
     def registered(self):
