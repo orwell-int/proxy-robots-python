@@ -62,8 +62,8 @@ class Broadcast(object):
                 self.send_one_broadcast_message()
             if (self._received):
                 self.decode_data()
-            else:
-                self._group = self._get_next_group()
+                break
+            self._group = self._get_next_group()
 
     def send_one_broadcast_message(self):
         try:
