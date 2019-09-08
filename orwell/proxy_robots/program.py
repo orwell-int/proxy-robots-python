@@ -122,23 +122,23 @@ class MessageHub(object):
         """
         `listener`: object which has a #notify method (which takes a message
             type, a routing id and a decoded protobuf message as arguments).
-        `message_type`: the types of messages the listener is intersted in.
-            If empty means all types are intersting.
-        `routing_id`: the routing ids the listener is intersted in. If empty
-            means all ids are intersting.
+        `message_type`: the types of messages the listener is interested in.
+            If empty means all types are interesting.
+        `routing_id`: the routing ids the listener is interested in. If empty
+            means all ids are interesting.
         Tell that #listener wants to be notified of messages read for type
-        #message_type and routind id #routing_id.
+        #message_type and routing id #routing_id.
         """
-        #LOGGER.debug('MessageHub.register({0}, {1}, {2}'.format()
-            #listener, message_type, routing_id)
-        if ((listener, routing_id) not in self._listeners[message_type]):
+        LOGGER.debug('MessageHub.register({0}, {1}, {2}'.format(
+            listener, message_type, routing_id))
+        if (listener, routing_id) not in self._listeners[message_type]:
             self._listeners[message_type].append((routing_id, listener))
 
     def unregister(self, listener, message_type, routing_id):
         """
         Reverts the effects of #register (the parameters must be the same).
         """
-        if ((listener, routing_id) in self._listeners[message_type]):
+        if (listener, routing_id) in self._listeners[message_type]:
             self._listeners[message_type].remove((listener, routing_id))
 
     def post(self, payload):
@@ -158,11 +158,11 @@ class MessageHub(object):
         # LOGGER.debug('_listeners = ' + str(self._listeners))
         string = self._subscriber.read()
         # LOGGER.debug('string = ' + repr(string))
-        if (string is not None):
+        if string is not None:
             routing_id, message_type, raw_message = string.split(b' ', 2)
             message_type = message_type.decode('ascii')
             routing_id = routing_id.decode('ascii')
-            if (message_type in REGISTRY):
+            if message_type in REGISTRY:
                 LOGGER.debug('message known = ' + repr(message_type))
                 message = REGISTRY[message_type]()
                 message.ParseFromString(raw_message)
@@ -172,11 +172,11 @@ class MessageHub(object):
                     LOGGER.debug(
                             'expected_routing_id = ' +
                             str(expected_routing_id))
-                    if (expected_routing_id):
+                    if expected_routing_id:
                         is_expected = True
                     else:
                         is_expected = (expected_routing_id == routing_id)
-                    if (is_expected):
+                    if is_expected:
                         listener.notify(message_type, routing_id, message)
             else:
                 LOGGER.debug('message NOT known = ' + repr(message_type))
@@ -246,7 +246,7 @@ class Action(object):
         self._repeat = repeat
         self._proxy = proxy
         self._status = Status.created
-        if (self._proxy):
+        if self._proxy:
             self._proxy.register(self)
 
     def call(self):
@@ -274,20 +274,20 @@ class Action(object):
         Update the status of the action.
         """
         updated = False
-        if (Status.created == self._status):
-            if (self._proxy):
+        if Status.created == self._status:
+            if self._proxy:
                 self._status = Status.pending
             else:
                 self._status = Status.waiting
             updated = True
-        if (not updated):
-            if (Status.pending == self._status):
+        if not updated:
+            if Status.pending == self._status:
                 self._status = Status.waiting
-            elif (self._status in (Status.successful, Status.failed)):
+            elif self._status in (Status.successful, Status.failed):
                 self._status = Status.created
-        if (Status.waiting == self._status):
-            if (not self._proxy):
-                if (self._success()):
+        if Status.waiting == self._status:
+            if not self._proxy:
+                if self._success():
                     self._status = Status.successful
                 else:
                     self._status = Status.failed
@@ -305,12 +305,12 @@ class Action(object):
             message_type,
             routing_id,
             message))
-        if (self._proxy.message_type):
-            if (self._proxy.message_type != message_type):
+        if self._proxy.message_type:
+            if self._proxy.message_type != message_type:
                 raise Exception("Expected message type {0} but got {1}".format(
                     self._proxy.message_type, message_type))
-        if (self._proxy.routing_id):
-            if (self._proxy.routing_id != routing_id):
+        if self._proxy.routing_id:
+            if self._proxy.routing_id != routing_id:
                 raise Exception("Expected routing id {0} but got {1}".format(
                     self._proxy.routing_id, routing_id))
         self._update_status()
@@ -344,25 +344,25 @@ class Actionner(object):
         poper = []
         new_actions = []
         for action in self._pending_actions:
-            if (Status.waiting == action.status):
+            if Status.waiting == action.status:
                 action._update_status()
                 poper.append(action)
-                if (Status.successful == action.status):
+                if Status.successful == action.status:
                     pass
-                elif (Status.failed == action.status):
-                    if (action.repeat):
+                elif Status.failed == action.status:
+                    if action.repeat:
                         action.reset()
                         new_actions.append(action)
         for action in poper:
             self._pending_actions.remove(action)
         for action in self._created_actions:
             action.call()
-            if (Status.pending == action.status):
+            if Status.pending == action.status:
                 self._pending_actions.append(action)
-            elif (Status.successful == action.status):
+            elif Status.successful == action.status:
                 pass
-            elif (Status.failed == action.status):
-                if (action.repeat):
+            elif Status.failed == action.status:
+                if action.repeat:
                     action.reset()
                     new_actions.append(action)
         self._created_actions = new_actions
@@ -480,9 +480,9 @@ class Robot(object):
         Notifications dispatcher.
         """
         assert(self._robot_id == routing_id)
-        if (Messages.Registered.name == message_type):
+        if Messages.Registered.name == message_type:
             self._notify_registered(message)
-        elif (Messages.Input.name == message_type):
+        elif Messages.Input.name == message_type:
             self._notify_input(message)
         else:
             raise Exception("Invalid message type: " + message_type)
@@ -538,7 +538,7 @@ class Program(object):
         `pusher_type`: see #MessageHub
         `replier_type`: see #MessageHub
         """
-        if (not arguments.no_server_broadcast):
+        if not arguments.no_server_broadcast:
             broadcast = Broadcast()
             LOGGER.info(
                     "push: " + broadcast.push_address +
@@ -564,7 +564,7 @@ class Program(object):
             replier_type)
         self._actionner = Actionner()
         self._robots = {}  # id -> Robot
-        if (not arguments.no_proxy_broadcast):
+        if not arguments.no_proxy_broadcast:
             self._broadcast = BroadcastListener(arguments.proxy_broadcast_port)
             # self._actionner.add_action(action)
         else:
@@ -601,7 +601,7 @@ class Program(object):
         """
         This should be called once the robots have been added.
         """
-        if (self._broadcast):
+        if self._broadcast:
             self._broadcast.start()
 
 def main():
@@ -650,7 +650,7 @@ def main():
     program = Program(arguments)
     for robot in robots:
         socket = sockets_lister.pop_available_socket()
-        if (socket):
+        if socket:
             device = HarpiDevice(socket)
             program.add_robot(robot, device)
             LOGGER.info('Device found for robot ' + str(robot))
@@ -659,7 +659,7 @@ def main():
             device = FakeDevice()
             program.add_robot(robot, device)
     program.start()
-    while (True):
+    while True:
         program.step()
 
 
@@ -673,12 +673,12 @@ def configure_logging(verbose):
             '%(filename)s %(lineno)d %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-    if (verbose):
+    if verbose:
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
     global LOGGER
     LOGGER = logging.getLogger("orwell.proxy_robot")
 
-if ("__main__" == __name__):
+if "__main__" == __name__:
     main()

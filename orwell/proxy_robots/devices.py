@@ -117,10 +117,10 @@ class HarpiDevice(object):
         else:
             try:
                 message, address = self._socket.recvfrom(4096)
-                if (message):
-                    LOGGER.info(
-                            "Message from robot: {message}".format(
-                                message=message))
+                # if (message):
+                    # LOGGER.info(
+                    #         "Message from robot: {message}".format(
+                    #             message=message))
             except socket.timeout:
                 pass
             except BlockingIOError:
