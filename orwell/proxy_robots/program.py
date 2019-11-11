@@ -2,21 +2,28 @@ from __future__ import print_function
 import argparse
 import zmq
 import logging
-import orwell.messages.robot_pb2 as robot_messages
-import orwell.messages.server_game_pb2 as server_game_messages
-import orwell.messages.controller_pb2 as controller_messages
-from orwell.common.broadcast_listener import BroadcastListener
-from orwell.common.broadcast import Broadcast
 import collections
 from enum import Enum
 import threading
 import time
+import sys
 
-from orwell.common.sockets_lister import SocketsLister
+from orwell_common.broadcast_listener import BroadcastListener
+from orwell_common.broadcast import Broadcast
+from orwell_common.broadcast import ServerGameDecoder
+from orwell_common.sockets_lister import SocketsLister
+import orwell_common.broadcast_listener
+import orwell_common.broadcast
+
 from orwell.proxy_robots.devices import FakeDevice, HarpiDevice
+import orwell.messages.robot_pb2 as robot_messages
+import orwell.messages.server_game_pb2 as server_game_messages
+import orwell.messages.controller_pb2 as controller_messages
 
 LOCK = threading.Lock()
 LOCK_SOCKET = threading.Lock()
+
+ZMQ_CONTEXT = zmq.Context.instance()
 
 
 class Messages(Enum):
@@ -81,12 +88,44 @@ class Replier(object):
         return self._socket.recv(flags=zmq.DONTWAIT)
 
 
+class Admin(object):
+    LIST_ROBOT = "list robot"
+
+    def __init__(self, program, admin_port=9082, zmq_context=ZMQ_CONTEXT):
+        """
+        `admin_port`: port to bind to and receive connections from the admin GUI
+        """
+        self._program = program
+        self._context = zmq_context
+        self._admin = self._context.socket(zmq.REP)
+        self._admin.bind("tcp://*:{port}".format(port=admin_port))
+
+    def _handle_admin_message(self, admin_message):
+        if not admin_message:
+            return
+        LOGGER.info("received admin command: %s", admin_message)
+        if Admin.LIST_ROBOT == admin_message:
+            robot_ids = [robot.robot_id
+                         for robot in self._program.robots.values()]
+            robots = str(robot_ids)
+            LOGGER.info("admin send robots = %s", robots)
+            self._admin.send_string(robots)
+
+    def step(self):
+        try:
+            self._handle_admin_message(
+                self._admin.recv_string(flags=zmq.DONTWAIT))
+        except zmq.error.Again:
+            pass
+
+
 class MessageHub(object):
     """
     Class that is in charge of orchestrating reads and writes.
     Items that are to be written are provided with #post and
     objects that want to be notified of reads listen through #register.
     """
+
     def __init__(
             self,
             publisher_address,
@@ -94,7 +133,8 @@ class MessageHub(object):
             replier_address,
             subscriber_type=Subscriber,
             pusher_type=Pusher,
-            replier_type=Replier):
+            replier_type=Replier,
+            zmq_context=ZMQ_CONTEXT):
         """
         `publisher_address`: address to read from.
         `pusher_address`: address to write to.
@@ -106,8 +146,8 @@ class MessageHub(object):
         `replier_type`: for testing purpose ; class to use as replier which
           writes to and reads from the replier address.
         """
-        self._context = zmq.Context.instance()
         # print("MessageHub ; pusher_address =", pusher_address)
+        self._context = zmq_context
         self._pusher = pusher_type(
                 pusher_address,
                 self._context)
@@ -541,14 +581,18 @@ class Program(object):
         `replier_type`: see #MessageHub
         """
         if not arguments.no_server_broadcast:
-            broadcast = Broadcast()
+            broadcast = Broadcast(ServerGameDecoder())
+            broadcast.send_all_broadcast_messages()
+            if not broadcast.decoder.success:
+                LOGGER.error("Could not find ServerGame, abort.")
+                sys.exit(1)
             LOGGER.info(
-                    "push: " + broadcast.push_address +
-                    " / subscribe: " + broadcast.subscribe_address +
-                    " / reply: " + broadcast.reply_address)
-            push_address = broadcast.push_address
-            subscribe_address = broadcast.subscribe_address
-            replier_address = broadcast.reply_address
+                    "push: " + broadcast.decoder.push_address +
+                    " / subscribe: " + broadcast.decoder.subscribe_address +
+                    " / reply: " + broadcast.decoder.reply_address)
+            push_address = broadcast.decoder.push_address
+            subscribe_address = broadcast.decoder.subscribe_address
+            replier_address = broadcast.decoder.reply_address
         else:
             ip = arguments.address
             push_address = "tcp://{ip}:{port}".format(
@@ -564,10 +608,13 @@ class Program(object):
             subscriber_type,
             pusher_type,
             replier_type)
+        self._admin = Admin(self, arguments.admin_port)
         self._actionner = Actionner()
         self._robots = {}  # id -> Robot
         if not arguments.no_proxy_broadcast:
-            self._broadcast = BroadcastListener(arguments.proxy_broadcast_port)
+            self._broadcast = BroadcastListener(
+                arguments.proxy_broadcast_port,
+                arguments.admin_port)
             # self._actionner.add_action(action)
         else:
             self._broadcast = None
@@ -596,6 +643,7 @@ class Program(object):
         """
         self._actionner.step()
         self._message_hub.step()
+        self._admin.step()
         for robot in self._robots.values():
             robot.step()
 
@@ -642,6 +690,11 @@ def main():
         default=False,
         action="store_true")
     parser.add_argument(
+        "--admin-port",
+        "-a",
+        help="The port the admin GUI can connect to",
+        default=9082, type=int)
+    parser.add_argument(
         '--verbose', '-v',
         help='Verbose mode',
         default=False,
@@ -683,6 +736,8 @@ def configure_logging(verbose):
         logger.setLevel(logging.INFO)
     global LOGGER
     LOGGER = logging.getLogger("orwell.proxy_robot")
+    orwell_common.broadcast_listener.configure_logging(verbose)
+    orwell_common.broadcast.configure_logging(verbose)
 
 
 if "__main__" == __name__:
