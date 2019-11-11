@@ -10,6 +10,7 @@ from orwell.common.broadcast import Broadcast
 import collections
 from enum import Enum
 import threading
+import time
 
 from orwell.common.sockets_lister import SocketsLister
 from orwell.proxy_robots.devices import FakeDevice, HarpiDevice
@@ -661,6 +662,7 @@ def main():
     program.start()
     while True:
         program.step()
+        time.sleep(0.01)
 
 
 def configure_logging(verbose):
