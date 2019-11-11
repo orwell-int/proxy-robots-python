@@ -18,6 +18,7 @@ from orwell.proxy_robots.devices import FakeDevice, HarpiDevice
 LOCK = threading.Lock()
 LOCK_SOCKET = threading.Lock()
 
+
 class Messages(Enum):
     Register = 'Register'
     Registered = 'Registered'
@@ -73,7 +74,7 @@ class Replier(object):
         return self.read()
 
     def write(self, message):
-        LOGGER.debug("Replier.write: " + repr(query))
+        LOGGER.debug("Replier.write: " + repr(message))
         self._socket.send(message)
 
     def read(self):
@@ -605,6 +606,7 @@ class Program(object):
         if self._broadcast:
             self._broadcast.start()
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -681,6 +683,7 @@ def configure_logging(verbose):
         logger.setLevel(logging.INFO)
     global LOGGER
     LOGGER = logging.getLogger("orwell.proxy_robot")
+
 
 if "__main__" == __name__:
     main()

@@ -52,10 +52,13 @@ class FakeDevice(object):
     def ready(self):
         return True
 
+    def get_socket(self):
+        return None
+
 
 class HarpiDevice(object):
-    def __init__(self, socket):
-        self._socket = socket
+    def __init__(self, sock):
+        self._socket = sock
         self._address = None
 
     def __del__(self):
@@ -69,7 +72,7 @@ class HarpiDevice(object):
         `left`: -1..1
         `right`: -1..1
         """
-        if (self._address):
+        if self._address:
             left = int(left * 255)
             right = int(right * 255)
             command = "move {left} {right}".format(left=left, right=right)
@@ -100,16 +103,17 @@ class HarpiDevice(object):
         return self._socket
 
     def ready(self):
-        if (not self._address):
+        if not self._address:
             try:
                 message, address = self._socket.recvfrom(4096)
-                if (message):
+                if message:
                     LOGGER.info(
                             "First message from robot: {message}".format(
                                 message=message))
                     self._address = address
             except socket.timeout:
-                LOGGER.debug("Failed to receive first message from robot - socket.timeout")
+                LOGGER.debug(
+                    "Failed to receive message from robot - socket.timeout")
                 pass
             except BlockingIOError:
                 # no message yet?
