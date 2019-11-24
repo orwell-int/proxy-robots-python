@@ -1,3 +1,6 @@
 [submodule "messages"]
 	path = messages
 	url = https://github.com/orwell-int/messages
+[submodule "python-common"]
+	path = python-common
+	url = https://github.com/orwell-int/python-common.git

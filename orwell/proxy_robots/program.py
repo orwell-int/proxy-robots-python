@@ -2,20 +2,29 @@ from __future__ import print_function
 import argparse
 import zmq
 import logging
+import collections
+from enum import Enum
+import threading
+import time
+import sys
+
+from orwell_common.broadcast_listener import BroadcastListener
+from orwell_common.broadcast import Broadcast
+from orwell_common.broadcast import ServerGameDecoder
+from orwell_common.sockets_lister import SocketsLister
+import orwell_common.broadcast_listener
+import orwell_common.broadcast
+
+from orwell.proxy_robots.devices import FakeDevice, HarpiDevice
 import orwell.messages.robot_pb2 as robot_messages
 import orwell.messages.server_game_pb2 as server_game_messages
 import orwell.messages.controller_pb2 as controller_messages
-from orwell.common.broadcast import Broadcast
-import collections
-from enum import Enum
-import codecs
-import socket
-import threading
 
 LOCK = threading.Lock()
 LOCK_SOCKET = threading.Lock()
 
-decode_hex = codecs.getdecoder("hex_codec")
+ZMQ_CONTEXT = zmq.Context.instance()
+
 
 class Messages(Enum):
     Register = 'Register'
@@ -72,11 +81,42 @@ class Replier(object):
         return self.read()
 
     def write(self, message):
-        LOGGER.debug("Replier.write: " + repr(query))
+        LOGGER.debug("Replier.write: " + repr(message))
         self._socket.send(message)
 
     def read(self):
         return self._socket.recv(flags=zmq.DONTWAIT)
+
+
+class Admin(object):
+    LIST_ROBOT = "list robot"
+
+    def __init__(self, program, admin_port=9082, zmq_context=ZMQ_CONTEXT):
+        """
+        `admin_port`: port to bind to and receive connections from the admin GUI
+        """
+        self._program = program
+        self._context = zmq_context
+        self._admin = self._context.socket(zmq.REP)
+        self._admin.bind("tcp://*:{port}".format(port=admin_port))
+
+    def _handle_admin_message(self, admin_message):
+        if not admin_message:
+            return
+        LOGGER.info("received admin command: %s", admin_message)
+        if Admin.LIST_ROBOT == admin_message:
+            robot_ids = [robot.robot_id
+                         for robot in self._program.robots.values()]
+            robots = str(robot_ids)
+            LOGGER.info("admin send robots = %s", robots)
+            self._admin.send_string(robots)
+
+    def step(self):
+        try:
+            self._handle_admin_message(
+                self._admin.recv_string(flags=zmq.DONTWAIT))
+        except zmq.error.Again:
+            pass
 
 
 class MessageHub(object):
@@ -85,6 +125,7 @@ class MessageHub(object):
     Items that are to be written are provided with #post and
     objects that want to be notified of reads listen through #register.
     """
+
     def __init__(
             self,
             publisher_address,
@@ -92,7 +133,8 @@ class MessageHub(object):
             replier_address,
             subscriber_type=Subscriber,
             pusher_type=Pusher,
-            replier_type=Replier):
+            replier_type=Replier,
+            zmq_context=ZMQ_CONTEXT):
         """
         `publisher_address`: address to read from.
         `pusher_address`: address to write to.
@@ -104,8 +146,8 @@ class MessageHub(object):
         `replier_type`: for testing purpose ; class to use as replier which
           writes to and reads from the replier address.
         """
-        self._context = zmq.Context.instance()
         # print("MessageHub ; pusher_address =", pusher_address)
+        self._context = zmq_context
         self._pusher = pusher_type(
                 pusher_address,
                 self._context)
@@ -122,23 +164,23 @@ class MessageHub(object):
         """
         `listener`: object which has a #notify method (which takes a message
             type, a routing id and a decoded protobuf message as arguments).
-        `message_type`: the types of messages the listener is intersted in.
-            If empty means all types are intersting.
-        `routing_id`: the routing ids the listener is intersted in. If empty
-            means all ids are intersting.
+        `message_type`: the types of messages the listener is interested in.
+            If empty means all types are interesting.
+        `routing_id`: the routing ids the listener is interested in. If empty
+            means all ids are interesting.
         Tell that #listener wants to be notified of messages read for type
-        #message_type and routind id #routing_id.
+        #message_type and routing id #routing_id.
         """
-        #LOGGER.debug('MessageHub.register({0}, {1}, {2}'.format()
-            #listener, message_type, routing_id)
-        if ((listener, routing_id) not in self._listeners[message_type]):
+        LOGGER.debug('MessageHub.register({0}, {1}, {2}'.format(
+            listener, message_type, routing_id))
+        if (listener, routing_id) not in self._listeners[message_type]:
             self._listeners[message_type].append((routing_id, listener))
 
     def unregister(self, listener, message_type, routing_id):
         """
         Reverts the effects of #register (the parameters must be the same).
         """
-        if ((listener, routing_id) in self._listeners[message_type]):
+        if (listener, routing_id) in self._listeners[message_type]:
             self._listeners[message_type].remove((listener, routing_id))
 
     def post(self, payload):
@@ -151,18 +193,19 @@ class MessageHub(object):
 
     def step(self):
         """
-        Process one incomming message (if any) and process all outgoing
+        Process one incoming message (if any) and process all outgoing
         messages (if any).
         """
         # LOGGER.debug('MessageHub.step()')
         # LOGGER.debug('_listeners = ' + str(self._listeners))
         string = self._subscriber.read()
         # LOGGER.debug('string = ' + repr(string))
-        if (string is not None):
+        if string is not None:
             routing_id, message_type, raw_message = string.split(b' ', 2)
             message_type = message_type.decode('ascii')
             routing_id = routing_id.decode('ascii')
-            if (message_type in REGISTRY):
+            if message_type in REGISTRY:
+                LOGGER.debug('message known = ' + repr(message_type))
                 message = REGISTRY[message_type]()
                 message.ParseFromString(raw_message)
                 for expected_routing_id, listener in \
@@ -171,12 +214,14 @@ class MessageHub(object):
                     LOGGER.debug(
                             'expected_routing_id = ' +
                             str(expected_routing_id))
-                    if (expected_routing_id):
+                    if expected_routing_id:
                         is_expected = True
                     else:
                         is_expected = (expected_routing_id == routing_id)
-                    if (is_expected):
+                    if is_expected:
                         listener.notify(message_type, routing_id, message)
+            else:
+                LOGGER.debug('message NOT known = ' + repr(message_type))
         for payload in self._outgoing:
             self._pusher.write(payload)
         del self._outgoing[:]
@@ -217,52 +262,6 @@ class Status(Enum):
     successful = 4
 
 
-finished = False
-
-class BroadcastListener(threading.Thread):
-    """
-    """
-    def __init__(self, port=9081):
-        """
-        """
-        threading.Thread.__init__(self)
-        self._socket_ports = []
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._socket.bind(('', port))
-
-    def add_socket_port(self, socket_port):
-        self._socket_ports.append(socket_port)
-
-    def run(self):
-        """
-        """
-        while (not finished):
-            message = None
-            try:
-                message, address = self._socket.recvfrom(4096)
-            except socket.timeout:
-                pass
-            except BlockingIOError:
-                pass
-            if (message):
-                try:
-                    LOGGER.info(
-                            "Received UDP broadcast '{message}' "
-                            "from {address}".format(
-                                message=message, address=address))
-                    if (self._socket_ports):
-                        port = self._socket_ports.pop(0)
-                        data = bytearray("{local_port}".format(local_port=port), "ascii")
-                    else:
-                        data = b"Goodbye"
-                    LOGGER.info("Try to send response to broadcast:{data}".format(data=data))
-                    self._socket.sendto(data, address)
-                except socket.timeout:
-                    LOGGER.info("Tried to send response but socket.timeout occurred")
-                except BlockingIOError:
-                    LOGGER.info("Tried to send response but BlockingIOError occurred")
-
-
 class Action(object):
     """
     Object functor to wrap a function and possibly the notification associated
@@ -289,7 +288,7 @@ class Action(object):
         self._repeat = repeat
         self._proxy = proxy
         self._status = Status.created
-        if (self._proxy):
+        if self._proxy:
             self._proxy.register(self)
 
     def call(self):
@@ -317,20 +316,20 @@ class Action(object):
         Update the status of the action.
         """
         updated = False
-        if (Status.created == self._status):
-            if (self._proxy):
+        if Status.created == self._status:
+            if self._proxy:
                 self._status = Status.pending
             else:
                 self._status = Status.waiting
             updated = True
-        if (not updated):
-            if (Status.pending == self._status):
+        if not updated:
+            if Status.pending == self._status:
                 self._status = Status.waiting
-            elif (self._status in (Status.successful, Status.failed)):
+            elif self._status in (Status.successful, Status.failed):
                 self._status = Status.created
-        if (Status.waiting == self._status):
-            if (not self._proxy):
-                if (self._success()):
+        if Status.waiting == self._status:
+            if not self._proxy:
+                if self._success():
                     self._status = Status.successful
                 else:
                     self._status = Status.failed
@@ -348,12 +347,12 @@ class Action(object):
             message_type,
             routing_id,
             message))
-        if (self._proxy.message_type):
-            if (self._proxy.message_type != message_type):
+        if self._proxy.message_type:
+            if self._proxy.message_type != message_type:
                 raise Exception("Expected message type {0} but got {1}".format(
                     self._proxy.message_type, message_type))
-        if (self._proxy.routing_id):
-            if (self._proxy.routing_id != routing_id):
+        if self._proxy.routing_id:
+            if self._proxy.routing_id != routing_id:
                 raise Exception("Expected routing id {0} but got {1}".format(
                     self._proxy.routing_id, routing_id))
         self._update_status()
@@ -387,25 +386,25 @@ class Actionner(object):
         poper = []
         new_actions = []
         for action in self._pending_actions:
-            if (Status.waiting == action.status):
+            if Status.waiting == action.status:
                 action._update_status()
                 poper.append(action)
-                if (Status.successful == action.status):
+                if Status.successful == action.status:
                     pass
-                elif (Status.failed == action.status):
-                    if (action.repeat):
+                elif Status.failed == action.status:
+                    if action.repeat:
                         action.reset()
                         new_actions.append(action)
         for action in poper:
             self._pending_actions.remove(action)
         for action in self._created_actions:
             action.call()
-            if (Status.pending == action.status):
+            if Status.pending == action.status:
                 self._pending_actions.append(action)
-            elif (Status.successful == action.status):
+            elif Status.successful == action.status:
                 pass
-            elif (Status.failed == action.status):
-                if (action.repeat):
+            elif Status.failed == action.status:
+                if action.repeat:
                     action.reset()
                     new_actions.append(action)
         self._created_actions = new_actions
@@ -464,13 +463,17 @@ class Robot(object):
         return self._fire2
 
     def step(self):
-        if (self._device.ready()):
+        if self._device.ready():
             if ((self._previous_left != self._left) or
                     (self._previous_right != self._right)):
-                if (self._device):
-                    self._device.move(self._left, self._right)
+                self._device.move(self._left, self._right)
                 self._previous_left = self._left
                 self._previous_right = self._right
+            if ((self._previous_fire1 != self._fire1) or
+                    (self._previous_fire2 != self._fire2)):
+                self._device.fire(self._fire1, self._fire2)
+                self._previous_fire1 = self._fire1
+                self._previous_fire2 = self._fire2
 
     @property
     def registered(self):
@@ -519,9 +522,9 @@ class Robot(object):
         Notifications dispatcher.
         """
         assert(self._robot_id == routing_id)
-        if (Messages.Registered.name == message_type):
+        if Messages.Registered.name == message_type:
             self._notify_registered(message)
-        elif (Messages.Input.name == message_type):
+        elif Messages.Input.name == message_type:
             self._notify_input(message)
         else:
             raise Exception("Invalid message type: " + message_type)
@@ -563,204 +566,6 @@ class Robot(object):
         #pass
 
 
-class SocketsLister(object):
-    """
-    Class that for now lists bluetooth device and open the matching sockets.
-    """
-    def __init__(self, socket_count=1):
-        self._sockets = []
-        self._used_sockets = set()
-        for i in range(socket_count):
-            sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
-            sock.setblocking(False)
-            sock.bind(("", 0))
-            self._sockets.append(sock)
-
-    def __del__(self):
-        """
-        Make sure we close all the sockets.
-        """
-        for sock in self._sockets:
-            sock.close()
-        for sock in self._used_sockets:
-            sock.close()
-
-    def pop_available_socket(self):
-        """
-        Return the first available socket (or None if none is found).
-        #You will be responsible of closing it.
-        """
-        available_socket = None
-        if (self._sockets):
-            available_socket = self._sockets.pop(0)
-            self._used_sockets.add(available_socket)
-        return available_socket
-
-
-class MoveOrder(Enum):
-    POWER = 1
-    SPEED = 2
-
-
-class Motors(Enum):
-    A = 1
-    B = 2
-    C = 4
-    D = 8
-
-
-class EV3Device(object):
-    def __init__(self, socket):
-        assert(socket is not None)
-        self._socket = socket
-
-    def __del__(self):
-        """
-        Just in case the last order was a move command, stop the robot.
-        """
-        self.stop()
-        #self._socket.close()
-
-    def get_move_command(self, motor, power, move=MoveOrder.POWER, safe=True):
-        """
-        `motor`: Motors enum (can be a sum)
-        `power`: -31..31
-        """
-        str_motor = "{0:02d}".format(motor)
-        if (safe):
-            converted_power = max(-31, min(31, power))
-            if (converted_power < 0):
-                converted_power = 64 + converted_power
-        else:
-            converted_power = power
-        str_power = hex(converted_power)[2:].zfill(2)
-        if (MoveOrder.POWER == move):
-            order = "A4"
-        elif (MoveOrder.SPEED == move):
-            order = "A5"
-        else:
-            order = "A4"
-        command = "0C000000800000" + order + "00"\
-            + str_motor + str_power + "A600" + str_motor
-        return decode_hex(command)
-
-    def get_stop_command(self, motor):
-        """
-        `motor`: Motors enum (can be a sum)
-        """
-        str_motor = "{0:02d}".format(motor)
-        command = "09000000800000A300" + str_motor + "00"
-        return decode_hex(command)
-
-    def move(self, left, right):
-        """
-        `left`: -1..1
-        `right`: -1..1
-        """
-        # 31 is a magic number comming from trial and error
-        scaled_left = int(float(left) * float(31))
-        scaled_right = int(float(right) * float(31))
-        command = self.get_move_command(Motors.A.value, scaled_left)
-        self._socket.send(command)
-        command = self.get_move_command(Motors.D.value, scaled_right)
-        self._socket.send(command)
-
-    def stop(self):
-        command = self.get_stop_command(Motors.A.value + Motors.D.value)
-        self._socket.send(command)
-
-    def get_socket(self):
-        return self._socket
-
-    def ready(self):
-        return True
-
-
-class FakeDevice(object):
-    def __init__(self):
-        pass
-
-    def __del__(self):
-        """
-        Just in case the last order was a move command, stop the robot.
-        """
-        self.stop()
-
-    def move(self, left, right):
-        """
-        `left`: -1..1
-        `right`: -1..1
-        """
-        LOGGER.debug("move({left}, {right})".format(left=left, right=right))
-
-    def stop(self):
-        LOGGER.debug("stop()")
-
-    def ready(self):
-        return True
-
-
-class HarpiDevice(object):
-    def __init__(self, socket):
-        self._socket = socket
-        self._address = None
-
-    def __del__(self):
-        """
-        Just in case the last order was a move command, stop the robot.
-        """
-        self.stop()
-
-    def move(self, left, right):
-        """
-        `left`: -1..1
-        `right`: -1..1
-        """
-        if (self._address):
-            left = int(left * 255)
-            right = int(right * 255)
-            command = "move {left} {right}".format(left=left, right=right)
-            LOGGER.debug("harpi::" + command)
-            self._socket.sendto(bytearray(command, "ascii"), self._address)
-        else:
-            LOGGER.debug("harpi::move device not ready to send command")
-
-    def stop(self):
-        LOGGER.debug("stop()")
-        self.move(0, 0)
-
-    def get_socket(self):
-        return self._socket
-
-    def ready(self):
-        if (not self._address):
-            try:
-                message, address = self._socket.recvfrom(4096)
-                if (message):
-                    LOGGER.info(
-                            "First message from robot: {message}".format(
-                                message=message))
-                    self._address = address
-            except socket.timeout:
-                LOGGER.debug("Failed to receive first mesage from robot - socket.timeout")
-                pass
-            except BlockingIOError:
-                # no message yet?
-                pass
-        else:
-            try:
-                message, address = self._socket.recvfrom(4096)
-                if (message):
-                    LOGGER.info(
-                            "Message from robot: {message}".format(
-                                message=message))
-            except socket.timeout:
-                pass
-            except BlockingIOError:
-                pass
-        return self._address is not None
-
-
 class Program(object):
     def __init__(
             self,
@@ -775,15 +580,19 @@ class Program(object):
         `pusher_type`: see #MessageHub
         `replier_type`: see #MessageHub
         """
-        if (not arguments.no_server_broadcast):
-            broadcast = Broadcast()
+        if not arguments.no_server_broadcast:
+            broadcast = Broadcast(ServerGameDecoder())
+            broadcast.send_all_broadcast_messages()
+            if not broadcast.decoder.success:
+                LOGGER.error("Could not find ServerGame, abort.")
+                sys.exit(1)
             LOGGER.info(
-                    "push: " + broadcast.push_address +
-                    " / subscribe: " + broadcast.subscribe_address +
-                    " / reply: " + broadcast.reply_address)
-            push_address = broadcast.push_address
-            subscribe_address = broadcast.subscribe_address
-            replier_address = broadcast.reply_address
+                    "push: " + broadcast.decoder.push_address +
+                    " / subscribe: " + broadcast.decoder.subscribe_address +
+                    " / reply: " + broadcast.decoder.reply_address)
+            push_address = broadcast.decoder.push_address
+            subscribe_address = broadcast.decoder.subscribe_address
+            replier_address = broadcast.decoder.reply_address
         else:
             ip = arguments.address
             push_address = "tcp://{ip}:{port}".format(
@@ -799,10 +608,13 @@ class Program(object):
             subscriber_type,
             pusher_type,
             replier_type)
+        self._admin = Admin(self, arguments.admin_port)
         self._actionner = Actionner()
         self._robots = {}  # id -> Robot
-        if (not arguments.no_proxy_broadcast):
-            self._broadcast = BroadcastListener(arguments.proxy_broadcast_port)
+        if not arguments.no_proxy_broadcast:
+            self._broadcast = BroadcastListener(
+                arguments.proxy_broadcast_port,
+                arguments.admin_port)
             # self._actionner.add_action(action)
         else:
             self._broadcast = None
@@ -831,6 +643,7 @@ class Program(object):
         """
         self._actionner.step()
         self._message_hub.step()
+        self._admin.step()
         for robot in self._robots.values():
             robot.step()
 
@@ -838,8 +651,9 @@ class Program(object):
         """
         This should be called once the robots have been added.
         """
-        if (self._broadcast):
+        if self._broadcast:
             self._broadcast.start()
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -876,6 +690,11 @@ def main():
         default=False,
         action="store_true")
     parser.add_argument(
+        "--admin-port",
+        "-a",
+        help="The port the admin GUI can connect to",
+        default=9082, type=int)
+    parser.add_argument(
         '--verbose', '-v',
         help='Verbose mode',
         default=False,
@@ -887,7 +706,7 @@ def main():
     program = Program(arguments)
     for robot in robots:
         socket = sockets_lister.pop_available_socket()
-        if (socket):
+        if socket:
             device = HarpiDevice(socket)
             program.add_robot(robot, device)
             LOGGER.info('Device found for robot ' + str(robot))
@@ -896,8 +715,9 @@ def main():
             device = FakeDevice()
             program.add_robot(robot, device)
     program.start()
-    while (True):
+    while True:
         program.step()
+        time.sleep(0.01)
 
 
 def configure_logging(verbose):
@@ -910,12 +730,15 @@ def configure_logging(verbose):
             '%(filename)s %(lineno)d %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-    if (verbose):
+    if verbose:
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
     global LOGGER
     LOGGER = logging.getLogger("orwell.proxy_robot")
+    orwell_common.broadcast_listener.configure_logging(verbose)
+    orwell_common.broadcast.configure_logging(verbose)
 
-if ("__main__" == __name__):
+
+if "__main__" == __name__:
     main()
