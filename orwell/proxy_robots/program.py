@@ -361,7 +361,7 @@ class Action(object):
         self._proxy.unregister(self)
 
 
-class Actionner(object):
+class Engine(object):
     """
     Engine that makes the actions run.
     """
@@ -380,22 +380,22 @@ class Actionner(object):
         Check all pending actions to see if a notification has been received.
         Run all the actions that are in the created state.
         """
-        #LOGGER.debug('Actionner.step()')
+        #LOGGER.debug('Engine.step()')
         #LOGGER.debug('_created_actions = ' + str(self._created_actions))
         #LOGGER.debug('_pending_actions = ' + str(self._pending_actions))
-        poper = []
+        to_remove = []
         new_actions = []
         for action in self._pending_actions:
             if Status.waiting == action.status:
-                action._update_status()
-                poper.append(action)
+                action.reset()
+                to_remove.append(action)
                 if Status.successful == action.status:
                     pass
                 elif Status.failed == action.status:
                     if action.repeat:
                         action.reset()
                         new_actions.append(action)
-        for action in poper:
+        for action in to_remove:
             self._pending_actions.remove(action)
         for action in self._created_actions:
             action.call()
@@ -415,18 +415,18 @@ class Robot(object):
             self,
             robot_id,
             message_hub,
-            actionner,
+            engine,
             device):
         """
         `robot_id`: identifies the robot somehow.
         `message_hub`: used to post message and get notifications.
-        `actionner`: object that will run the actions for the robot.
-        `device`: deviced used to communicate with the robot.
+        `engine`: object that will run the actions for the robot.
+        `device`: device used to communicate with the robot.
         """
         self._robot_id = robot_id
         # self._name = ''
         self._message_hub = message_hub
-        self._actionner = actionner
+        self._engine = engine
         self._device = device
         self._registered = False
         self._left = 0.0
@@ -498,7 +498,7 @@ class Robot(object):
             lambda: self.registered,
             proxy,
             repeat=True)
-        self._actionner.add_action(action)
+        self._engine.add_action(action)
 
     def register(self):
         """
@@ -609,21 +609,21 @@ class Program(object):
             pusher_type,
             replier_type)
         self._admin = Admin(self, arguments.admin_port)
-        self._actionner = Actionner()
+        self._engine = Engine()
         self._robots = {}  # id -> Robot
         if not arguments.no_proxy_broadcast:
             self._broadcast = BroadcastListener(
                 arguments.proxy_broadcast_port,
                 arguments.admin_port)
-            # self._actionner.add_action(action)
+            # self._engine.add_action(action)
         else:
             self._broadcast = None
 
     def add_robot(self, robot_id, device=None):
         """
-        Create a rebot and ask it to register into the server.
+        Create a robot and ask it to register into the server.
         """
-        robot = Robot(robot_id, self._message_hub, self._actionner, device)
+        robot = Robot(robot_id, self._message_hub, self._engine, device)
         self._robots[robot_id] = robot
         robot_socket = device.get_socket()
         port = robot_socket.getsockname()[1]
@@ -639,9 +639,9 @@ class Program(object):
 
     def step(self):
         """
-        Run the actionner and the message hub (only one call).
+        Run the engine and the message hub (only one call).
         """
-        self._actionner.step()
+        self._engine.step()
         self._message_hub.step()
         self._admin.step()
         for robot in self._robots.values():
@@ -676,7 +676,7 @@ def main():
         default=9080, type=int)
     parser.add_argument(
         "--no-server-broadcast",
-        help="The port for the broadcast on server game",
+        help="Do not send a broadcast message to the game server.",
         default=False,
         action="store_true")
     parser.add_argument(
@@ -686,7 +686,7 @@ def main():
         default=9081, type=int)
     parser.add_argument(
         "--no-proxy-broadcast",
-        help="The port for the broadcast on the proxy",
+        help="Do not listen for broadcast messages.",
         default=False,
         action="store_true")
     parser.add_argument(
