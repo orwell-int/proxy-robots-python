@@ -1,7 +1,7 @@
-import os
-
 from pathlib import Path
 
-proto_files = " ".join([str(p) for p in (Path(".").glob("messages/*.proto"))])
-
-os.popen('protoc -I=messages --python_out=orwell/messages/ ' + proto_files)
+import importlib.util
+spec = importlib.util.spec_from_file_location("messages", Path(".") / "messages" / "generate.py")
+foo = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(foo)
+foo.main(Path("."))

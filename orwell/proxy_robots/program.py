@@ -6,6 +6,7 @@ import collections
 from enum import Enum
 import threading
 import time
+import datetime
 import sys
 
 from orwell_common.broadcast_listener import BroadcastListener
@@ -123,7 +124,7 @@ class MessageHub(object):
     """
     Class that is in charge of orchestrating reads and writes.
     Items that are to be written are provided with #post and
-    objects that want to be notified of reads listen through #register.
+    objects that want to be notified of reads listen through #register_listener.
     """
 
     def __init__(
@@ -160,7 +161,7 @@ class MessageHub(object):
         self._listeners = collections.defaultdict(list)
         self._outgoing = []
 
-    def register(self, listener, message_type, routing_id):
+    def register_listener(self, listener, message_type, routing_id):
         """
         `listener`: object which has a #notify method (which takes a message
             type, a routing id and a decoded protobuf message as arguments).
@@ -171,14 +172,14 @@ class MessageHub(object):
         Tell that #listener wants to be notified of messages read for type
         #message_type and routing id #routing_id.
         """
-        LOGGER.debug('MessageHub.register({0}, {1}, {2}'.format(
+        LOGGER.debug('MessageHub.register_listener({0}, {1}, {2}'.format(
             listener, message_type, routing_id))
         if (listener, routing_id) not in self._listeners[message_type]:
             self._listeners[message_type].append((routing_id, listener))
 
-    def unregister(self, listener, message_type, routing_id):
+    def unregister_listener(self, listener, message_type, routing_id):
         """
-        Reverts the effects of #register (the parameters must be the same).
+        Reverts the effects of #register_listener (the parameters must be the same).
         """
         if (listener, routing_id) in self._listeners[message_type]:
             self._listeners[message_type].remove((listener, routing_id))
@@ -227,26 +228,120 @@ class MessageHub(object):
         del self._outgoing[:]
 
 
+class DumbMessageHubWrapper(object):
+    def __init__(
+            self,
+            message_hub=None):
+        self._message_hub = message_hub
+        self._waiters = []
+
+    @property
+    def message_hub(self):
+        return self._message_hub
+
+    @property
+    def is_valid(self):
+        return self._message_hub is not None
+
+    def step(self):
+        if self._message_hub is not None:
+            self._message_hub.step()
+
+    def register_waiter(self, waiter):
+        self._waiters.append(waiter)
+
+    def notify_waiters(self):
+        for waiter in self._waiters:
+            waiter.notify_message_hub(self._message_hub)
+
+
+class BroadcasterMessageHubWrapper(DumbMessageHubWrapper):
+    def __init__(
+            self,
+            delta_check,
+            subscriber_type=Subscriber,
+            pusher_type=Pusher,
+            replier_type=Replier):
+        super().__init__()
+        self._subscriber_type = subscriber_type
+        self._pusher_type = pusher_type
+        self._replier_type = replier_type
+        self._broadcaster = Broadcast(ServerGameDecoder(), retries=1)
+        self._delta_check = delta_check
+        self._next_check = datetime.datetime.now()
+
+    def _check_message_hub(self):
+        LOGGER.debug("BroadcasterMessageHubWrapper._check_message_hub")
+        if self._message_hub:
+            if not self._broadcaster.send_one_broadcast_message(silent=True):
+                LOGGER.info("Lost contact with ServerGame.")
+                self._message_hub = None
+        else:
+            self._broadcaster.send_all_broadcast_messages()
+            if not self._broadcaster.decoder.success:
+                LOGGER.info("Could not find ServerGame.")
+            else:
+                # We assume this is still the same instance of server game
+                # or at least with the same properties.
+                # If the game server disconnects and a new one takes its place
+                # it might be unnoticed and things will not work properly.
+                LOGGER.info(
+                    "push: " + self._broadcaster.decoder.push_address +
+                    " / subscribe: " + self._broadcaster.decoder.subscribe_address +
+                    " / reply: " + self._broadcaster.decoder.reply_address)
+                push_address = self._broadcaster.decoder.push_address
+                subscribe_address = self._broadcaster.decoder.subscribe_address
+                replier_address = self._broadcaster.decoder.reply_address
+                self._message_hub = MessageHub(
+                    subscribe_address,
+                    push_address,
+                    replier_address,
+                    self._subscriber_type,
+                    self._pusher_type,
+                    self._replier_type)
+                self.notify_waiters()
+
+    def step(self):
+        now = datetime.datetime.now()
+        if self._next_check <= now:
+            self._check_message_hub()
+            self._next_check = now + self._delta_check
+        super().step()
+
+
 class Proxy(object):
     """
     Helper class.
     """
     def __init__(
             self,
-            message_hub,
+            message_hub_wrapper,
             callback,
             message_type,
             routing_id):
-        self.message_hub = message_hub
+        self.message_hub_wrapper = message_hub_wrapper
+        message_hub_wrapper.register_waiter(self)
         self.callback = callback
         self.message_type = message_type
         self.routing_id = routing_id
+        self._actions = []
 
-    def register(self, action):
-        self.message_hub.register(action, self.message_type, self.routing_id)
+    def register_listener(self, action):
+        if self.message_hub_wrapper.is_valid:
+            self.message_hub_wrapper.message_hub.register_listener(
+                action, self.message_type, self.routing_id)
+        else:
+            self._actions.append(action)
+
+    def notify_message_hub(self, message_hub):
+        for action in self._actions:
+            message_hub.register_listener(
+                action, self.message_type, self.routing_id)
 
     def unregister(self, action):
-        self.message_hub.unregister(action, self.message_type, self.routing_id)
+        if self.message_hub_wrapper.is_valid:
+            self.message_hub_wrapper.message_hub.unregister_listener(
+                action, self.message_type, self.routing_id)
 
 
 class Status(Enum):
@@ -281,7 +376,7 @@ class Action(object):
         `proxy`: the object containing information about the notification to
             register to (if needed). If None, there is no registration.
         `repeat`: True if and only if the action is to be attempted again on
-            failure. The function #doer is called again when this happends.
+            failure. The function #doer is called again when this happens.
         """
         self._doer = doer
         self._success = success
@@ -289,7 +384,7 @@ class Action(object):
         self._proxy = proxy
         self._status = Status.created
         if self._proxy:
-            self._proxy.register(self)
+            self._proxy.register_listener(self)
 
     def call(self):
         """
@@ -346,7 +441,7 @@ class Action(object):
         LOGGER.debug('Action.notify({0}, {1}, {2})'.format(
             message_type,
             routing_id,
-            message))
+            repr(message)))
         if self._proxy.message_type:
             if self._proxy.message_type != message_type:
                 raise Exception("Expected message type {0} but got {1}".format(
@@ -414,18 +509,18 @@ class Robot(object):
     def __init__(
             self,
             robot_id,
-            message_hub,
+            message_hub_wrapper,
             engine,
             device):
         """
         `robot_id`: identifies the robot somehow.
-        `message_hub`: used to post message and get notifications.
+        `message_hub_wrapper`: used to post message and get notifications.
         `engine`: object that will run the actions for the robot.
         `device`: device used to communicate with the robot.
         """
         self._robot_id = robot_id
         # self._name = ''
-        self._message_hub = message_hub
+        self._message_hub_wrapper = message_hub_wrapper
         self._engine = engine
         self._device = device
         self._registered = False
@@ -489,29 +584,30 @@ class Robot(object):
         """
         #LOGGER.debug('queue_register')
         proxy = Proxy(
-            self._message_hub,
+            self._message_hub_wrapper,
             self.notify,
             Messages.Registered.name,
             self._robot_id)
         action = Action(
-            self.register,
+            self.send_register,
             lambda: self.registered,
             proxy,
             repeat=True)
         self._engine.add_action(action)
 
-    def register(self):
+    def send_register(self):
         """
         Post a message to ask for the registration of the robot.
         """
-        message = REGISTRY[Messages.Register.name]()
-        message.temporary_robot_id = self._robot_id
-        message.image = "no image"
-        payload = '{0} {1} '.format(
-            self._robot_id,
-            Messages.Register.name).encode()
-        payload += message.SerializeToString()
-        self._message_hub.post(payload)
+        if self._message_hub_wrapper.is_valid:
+            message = REGISTRY[Messages.Register.name]()
+            message.temporary_robot_id = self._robot_id
+            message.image = "no image"
+            payload = '{0} {1} '.format(
+                self._robot_id,
+                Messages.Register.name).encode()
+            payload += message.SerializeToString()
+            self._message_hub_wrapper.message_hub.post(payload)
 
     def notify(
             self,
@@ -521,6 +617,7 @@ class Robot(object):
         """
         Notifications dispatcher.
         """
+        LOGGER.info("notify message_type: " + str(message_type))
         assert(self._robot_id == routing_id)
         if Messages.Registered.name == message_type:
             self._notify_registered(message)
@@ -536,8 +633,13 @@ class Robot(object):
         LOGGER.info("Registered")
         self._registered = True
         self._robot_id = message.robot_id
-        # this is a hack as we should only register when the game starts
-        self._message_hub.register(self, Messages.Input.name, self._robot_id)
+        if self._message_hub_wrapper.is_valid:
+            # this is a hack as we should only register when the game starts
+            self._message_hub_wrapper.message_hub.register_listener(
+                self, Messages.Input.name, self._robot_id)
+        else:
+            # maybe we should even halt when this happens
+            LOGGER.warn("Could not get message hub from Robot!")
         # there is no longer a name attribute in Registered
         # if (message.name):
             # self._registered = True
@@ -546,7 +648,7 @@ class Robot(object):
                 # #self._robot_id,
                 # #self._name))
             # # this is a hack as we should only register when the game starts
-            # self._message_hub.register(
+            # self._message_hub.register_listener(
                 # self, Messages.Input.name, self._robot_id)
 
     def _notify_input(self, message):
@@ -580,57 +682,51 @@ class Program(object):
         `pusher_type`: see #MessageHub
         `replier_type`: see #MessageHub
         """
-        if not arguments.no_server_broadcast:
-            broadcast = Broadcast(ServerGameDecoder())
-            broadcast.send_all_broadcast_messages()
-            if not broadcast.decoder.success:
-                LOGGER.error("Could not find ServerGame, abort.")
-                sys.exit(1)
-            LOGGER.info(
-                    "push: " + broadcast.decoder.push_address +
-                    " / subscribe: " + broadcast.decoder.subscribe_address +
-                    " / reply: " + broadcast.decoder.reply_address)
-            push_address = broadcast.decoder.push_address
-            subscribe_address = broadcast.decoder.subscribe_address
-            replier_address = broadcast.decoder.reply_address
-        else:
+        if arguments.no_server_broadcast:
             ip = arguments.address
             push_address = "tcp://{ip}:{port}".format(
-                    ip=ip, port=arguments.puller_port)
+                ip=ip, port=arguments.puller_port)
             subscribe_address = "tcp://{ip}:{port}".format(
-                    ip=ip, port=arguments.publisher_port)
+                ip=ip, port=arguments.publisher_port)
             replier_address = "tcp://{ip}:{port}".format(
-                    ip=ip, port=arguments.replier_port)
-        self._message_hub = MessageHub(
-            subscribe_address,
-            push_address,
-            replier_address,
-            subscriber_type,
-            pusher_type,
-            replier_type)
+                ip=ip, port=arguments.replier_port)
+            self._message_hub_wrapper = DumbMessageHubWrapper(
+                MessageHub(
+                    subscribe_address,
+                    push_address,
+                    replier_address,
+                    subscriber_type,
+                    pusher_type,
+                    replier_type))
+        else:
+            self._message_hub_wrapper = BroadcasterMessageHubWrapper(
+                datetime.timedelta(seconds=5),
+                subscriber_type,
+                pusher_type,
+                replier_type)
         self._admin = Admin(self, arguments.admin_port)
         self._engine = Engine()
         self._robots = {}  # id -> Robot
         if not arguments.no_proxy_broadcast:
-            self._broadcast = BroadcastListener(
+            self._broadcastListener = BroadcastListener(
                 arguments.proxy_broadcast_port,
                 arguments.admin_port)
             # self._engine.add_action(action)
         else:
-            self._broadcast = None
+            self._broadcastListener = None
 
     def add_robot(self, robot_id, device=None):
         """
         Create a robot and ask it to register into the server.
         """
-        robot = Robot(robot_id, self._message_hub, self._engine, device)
+        robot = Robot(robot_id, self._message_hub_wrapper, self._engine, device)
         self._robots[robot_id] = robot
         robot_socket = device.get_socket()
         port = robot_socket.getsockname()[1]
         LOGGER.info(
                 "Robot {id} is using port {port}".format(
                     id=robot_id, port=port))
-        self._broadcast.add_socket_port(port)
+        self._broadcastListener.add_socket_port(port)
         robot.queue_register()
 
     @property
@@ -641,8 +737,8 @@ class Program(object):
         """
         Run the engine and the message hub (only one call).
         """
+        self._message_hub_wrapper.step()
         self._engine.step()
-        self._message_hub.step()
         self._admin.step()
         for robot in self._robots.values():
             robot.step()
@@ -651,8 +747,8 @@ class Program(object):
         """
         This should be called once the robots have been added.
         """
-        if self._broadcast:
-            self._broadcast.start()
+        if self._broadcastListener:
+            self._broadcastListener.start()
 
 
 def main():
