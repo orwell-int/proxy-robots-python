@@ -1,25 +1,8 @@
 import logging
 import socket
-import codecs
-from enum import Enum
 
 
 LOGGER = logging.getLogger("orwell.proxy_robot")
-
-
-decode_hex = codecs.getdecoder("hex_codec")
-
-
-class MoveOrder(Enum):
-    POWER = 1
-    SPEED = 2
-
-
-class Motors(Enum):
-    A = 1
-    B = 2
-    C = 4
-    D = 8
 
 
 class FakeDevice(object):

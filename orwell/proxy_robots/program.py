@@ -7,7 +7,6 @@ from enum import Enum
 import threading
 import time
 import datetime
-import sys
 
 from orwell_common.broadcast_listener import BroadcastListener
 from orwell_common.broadcast import Broadcast
@@ -89,17 +88,34 @@ class Replier(object):
         return self._socket.recv(flags=zmq.DONTWAIT)
 
 
+class AdminSocket(object):
+    def __init__(self, admin_port, zmq_context=ZMQ_CONTEXT):
+        self._context = zmq_context
+        self._admin = self._context.socket(zmq.REP)
+        self._admin.bind("tcp://*:{port}".format(port=admin_port))
+
+    def recv_string(self, flags=0, encoding='utf-8'):
+        return self._admin.recv_string(flags, encoding)
+
+    def send_string(self, u, flags=0, copy=True, encoding='utf-8', **kwargs):
+        return self._admin.send_string(self, u, flags, copy, encoding, **kwargs)
+
+
 class Admin(object):
     LIST_ROBOT = "list robot"
 
-    def __init__(self, program, admin_port=9082, zmq_context=ZMQ_CONTEXT):
+    def __init__(
+            self,
+            program,
+            admin_port=9082,
+            admin_socket_type=AdminSocket,
+            zmq_context=ZMQ_CONTEXT):
         """
         `admin_port`: port to bind to and receive connections from the admin GUI
         """
         self._program = program
         self._context = zmq_context
-        self._admin = self._context.socket(zmq.REP)
-        self._admin.bind("tcp://*:{port}".format(port=admin_port))
+        self._admin_socket = admin_socket_type(admin_port)
 
     def _handle_admin_message(self, admin_message):
         if not admin_message:
@@ -110,12 +126,12 @@ class Admin(object):
                          for robot in self._program.robots.values()]
             robots = str(robot_ids)
             LOGGER.info("admin send robots = %s", robots)
-            self._admin.send_string(robots)
+            self._admin_socket.send_string(robots)
 
     def step(self):
         try:
             self._handle_admin_message(
-                self._admin.recv_string(flags=zmq.DONTWAIT))
+                self._admin_socket.recv_string(flags=zmq.DONTWAIT))
         except zmq.error.Again:
             pass
 
@@ -256,17 +272,28 @@ class DumbMessageHubWrapper(object):
 
 
 class BroadcasterMessageHubWrapper(DumbMessageHubWrapper):
+    """
+    MessageHub wrapper that periodically checks if the game server responds to
+    broadcast to make sure it is up.
+    Creates a MessageHub when the game server becomes available.
+    Destroys the wrapped MessageHub when the game server becomes unavailable.
+    """
+
     def __init__(
             self,
             delta_check,
+            broadcast_type=Broadcast,
             subscriber_type=Subscriber,
             pusher_type=Pusher,
             replier_type=Replier):
+        """
+        `delta_check`: interval between two checks (test presence of game server).
+        """
         super().__init__()
         self._subscriber_type = subscriber_type
         self._pusher_type = pusher_type
         self._replier_type = replier_type
-        self._broadcaster = Broadcast(ServerGameDecoder(), retries=1)
+        self._broadcaster = broadcast_type(ServerGameDecoder(), retries=1)
         self._delta_check = delta_check
         self._next_check = datetime.datetime.now()
 
@@ -674,7 +701,8 @@ class Program(object):
             arguments,
             subscriber_type=Subscriber,
             pusher_type=Pusher,
-            replier_type=Replier):
+            replier_type=Replier,
+            admin_type=Admin):
         """
         `arguments`: object that must at least contain publisher_port,
             puller_port, address. (not any longer with the broadcast)
@@ -701,10 +729,11 @@ class Program(object):
         else:
             self._message_hub_wrapper = BroadcasterMessageHubWrapper(
                 datetime.timedelta(seconds=5),
+                Broadcast,
                 subscriber_type,
                 pusher_type,
                 replier_type)
-        self._admin = Admin(self, arguments.admin_port)
+        self._admin = admin_type(self, arguments.admin_port)
         self._engine = Engine()
         self._robots = {}  # id -> Robot
         if not arguments.no_proxy_broadcast:
