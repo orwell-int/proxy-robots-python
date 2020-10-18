@@ -1,16 +1,12 @@
-from __future__ import print_function
 import argparse
 import logging
 import time
 
-from orwell.common.broadcast_listener import BroadcastListener
-import collections
-from enum import Enum
-import socket
+from orwell_common.broadcast_listener import BroadcastListener
 import threading
 
-from orwell.common.sockets_lister import SocketsLister
-from orwell.proxy_robots.devices import FakeDevice, HarpiDevice
+from orwell_common.sockets_lister import SocketsLister
+from orwell.proxy_robots.devices import HarpiDevice
 
 LOCK = threading.Lock()
 LOCK_SOCKET = threading.Lock()
@@ -67,6 +63,7 @@ class Program(object):
         if (self._broadcast):
             self._broadcast.start()
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -76,7 +73,7 @@ def main():
         default=9081, type=int)
     parser.add_argument(
         "--no-proxy-broadcast",
-        help="The port for the broadcast on the proxy",
+        help="Do not listen for broadcast messages.",
         default=False,
         action="store_true")
     parser.add_argument(

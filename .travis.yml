@@ -8,4 +8,4 @@ install:
     - git submodule update --init --recursive
     - pip install -r requirements.txt
     - ./generate.sh
-script: nosetests
+script: nosetests --with-coverage --cover-package=orwell
