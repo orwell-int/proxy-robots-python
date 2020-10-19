@@ -98,7 +98,7 @@ class AdminSocket(object):
         return self._admin.recv_string(flags, encoding)
 
     def send_string(self, u, flags=0, copy=True, encoding='utf-8', **kwargs):
-        return self._admin.send_string(self, u, flags, copy, encoding, **kwargs)
+        return self._admin.send_string(u, flags, copy, encoding, **kwargs)
 
 
 class Admin(object):

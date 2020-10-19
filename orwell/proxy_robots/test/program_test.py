@@ -10,7 +10,6 @@ import threading
 import socket
 
 import orwell_common.broadcast_listener
-import orwell_common.broadcast as ob
 
 opp.configure_logging(False)
 
@@ -330,8 +329,6 @@ def test_robot_input():
     program.step()
     program.step()
     program.step()
-    #import time
-    #time.sleep(1)
 
 
 class FakeSocket(object):
@@ -343,15 +340,12 @@ class FakeSocket(object):
         self._recvfrom_list = recvfrom_list
 
     def __del__(self):
-        #assert_equals(0, len(self._expected_content_list))
+        assert_equals(0, len(self._expected_content_list))
         pass
-
-    #def close(self):
-        #pass
 
     def send(self, content):
         expected_content = self._expected_content_list.pop(0)
-        #assert_equals(expected_content, content)
+        assert_equals(expected_content, content)
 
     def getsockname(self):
         print("FakeSocket::getsockname")
@@ -364,49 +358,6 @@ class FakeSocket(object):
         else:
             item = None
         return item, self._address
-
-
-class FakeBroadcast:
-    def __init__(self):
-        pass
-
-    def __call__(self, decoder, port=ob.DEFAULT_PORT, retries=2, timeout=3):
-        return self
-
-    def set_decoder(self, decoder):
-        print("FakeBroadcast - set_decoder")
-        pass
-
-    def send_all_broadcast_messages(self):
-        print("FakeBroadcast - send_all_broadcast_messages")
-        self.reset()
-
-    def reset(self):
-        print("FakeBroadcast - reset")
-        pass
-
-    def send_one_broadcast_message(self, silent=False):
-        print("FakeBroadcast - send_one_broadcast_message")
-        return None
-
-    def decode_data(self):
-        print("FakeBroadcast - decode_data")
-        pass
-
-    @property
-    def decoder(self):
-        print("FakeBroadcast - decoder.get")
-        return None
-
-    @decoder.setter
-    def decoder(self, value):
-        print("FakeBroadcast - decoder.set")
-        pass
-
-    @property
-    def remote_address(self):
-        print("FakeBroadcast - remote_address.get")
-        return None
 
 
 def test_missing_server_game():
@@ -463,6 +414,7 @@ def test_missing_server_game():
 def main():
     test_robot_registration()
     test_robot_input()
+
 
 if "__main__" == __name__:
     main()
