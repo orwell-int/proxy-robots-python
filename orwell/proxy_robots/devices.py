@@ -1,8 +1,7 @@
 import logging
 import socket
 
-
-LOGGER = logging.getLogger("orwell.proxy_robot")
+LOGGER = logging.getLogger(__name__)
 
 
 class FakeDevice(object):
@@ -91,8 +90,8 @@ class HarpiDevice(object):
                 message, address = self._socket.recvfrom(4096)
                 if message:
                     LOGGER.info(
-                            "First message from robot: {message}".format(
-                                message=message))
+                        "First message from robot: {message}".format(
+                            message=message))
                     self._address = address
             except socket.timeout:
                 LOGGER.debug(
@@ -105,9 +104,9 @@ class HarpiDevice(object):
             try:
                 message, address = self._socket.recvfrom(4096)
                 # if (message):
-                    # LOGGER.info(
-                    #         "Message from robot: {message}".format(
-                    #             message=message))
+                # LOGGER.info(
+                #         "Message from robot: {message}".format(
+                #             message=message))
             except socket.timeout:
                 pass
             except BlockingIOError:

@@ -3,16 +3,12 @@ import logging
 import time
 
 from orwell_common.broadcast_listener import BroadcastListener
-import threading
-
 from orwell_common.sockets_lister import SocketsLister
+import orwell_common.logging
+
 from orwell.proxy_robots.devices import HarpiDevice
 
-LOCK = threading.Lock()
-LOCK_SOCKET = threading.Lock()
-
-
-LOGGER = None
+LOGGER = logging.getLogger(__name__)
 
 
 class Program(object):
@@ -22,9 +18,8 @@ class Program(object):
         """
         """
         self._devices = {}
-        if (not arguments.no_proxy_broadcast):
+        if not arguments.no_proxy_broadcast:
             self._broadcast = BroadcastListener(arguments.proxy_broadcast_port)
-            # self._actionner.add_action(action)
         else:
             self._broadcast = None
         self._fire_pattern = False
@@ -36,13 +31,9 @@ class Program(object):
         robot_socket = device.get_socket()
         port = robot_socket.getsockname()[1]
         LOGGER.info(
-                "Robot {id} is using port {port}".format(
-                    id=robot_id, port=port))
+            "Robot {id} is using port {port}".format(
+                id=robot_id, port=port))
         self._broadcast.add_socket_port(port)
-
-    @property
-    def robots(self):
-        return self._robots
 
     def step(self):
         """
@@ -60,7 +51,7 @@ class Program(object):
         """
         This should be called once the robots have been added.
         """
-        if (self._broadcast):
+        if self._broadcast:
             self._broadcast.start()
 
 
@@ -82,13 +73,13 @@ def main():
         default=False,
         action="store_true")
     arguments = parser.parse_args()
-    configure_logging(arguments.verbose)
+    orwell_common.logging.configure_logging(arguments.verbose)
     sockets_lister = SocketsLister()
     robots = ['951']
     program = Program(arguments)
     for robot in robots:
         socket = sockets_lister.pop_available_socket()
-        if (socket):
+        if socket:
             device = HarpiDevice(socket)
             program.add_robot(robot, device)
             LOGGER.info('Device found for robot ' + str(robot))
@@ -96,27 +87,10 @@ def main():
             LOGGER.info('Oups, no device to associate to robot ' + str(robot))
             return
     program.start()
-    while (True):
+    while True:
         program.step()
         time.sleep(5)
 
 
-def configure_logging(verbose):
-    print("program.configure_logging")
-    logger = logging.getLogger("orwell")
-    logger.propagate = False
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-            '%(asctime)s %(name)-12s %(levelname)-8s '
-            '%(filename)s %(lineno)d %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    if (verbose):
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(logging.INFO)
-    global LOGGER
-    LOGGER = logging.getLogger("orwell.proxy_robot")
-
-if ("__main__" == __name__):
+if "__main__" == __name__:
     main()
