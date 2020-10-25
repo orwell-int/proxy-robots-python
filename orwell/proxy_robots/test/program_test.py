@@ -1,17 +1,21 @@
-import orwell.proxy_robots.program as opp
-from nose.tools import assert_equals
-from nose.tools import assert_true
-from nose.tools import assert_false
-import unittest.mock
 from enum import Enum
+from nose.tools import assert_equals
+from nose.tools import assert_false
+from nose.tools import assert_true
 import datetime
-
-import threading
 import socket
+import threading
+import unittest.mock
 
 import orwell_common.broadcast_listener
+import orwell_common.logging
 
-opp.configure_logging(False)
+from orwell.proxy_robots.message_hub import BroadcasterMessageHubWrapper
+from orwell.proxy_robots.program import Program
+from orwell.proxy_robots.registry import Messages
+from orwell.proxy_robots.registry import REGISTRY
+
+orwell_common.logging.configure_logging(False)
 
 MOVES = [
     ('951', 1.0, 0),
@@ -77,12 +81,12 @@ class MockPusher(object):
     def __init__(self, address, context):
         self.messages = []
         for robot_id, _, _ in ROBOT_DESCRIPTORS:
-            message = opp.REGISTRY[opp.Messages.Register.name]()
+            message = REGISTRY[Messages.Register.name]()
             message.temporary_robot_id = robot_id
             message.image = "no image"
             payload = "{0} {1} ".format(
                 robot_id,
-                opp.Messages.Register.name).encode()
+                Messages.Register.name).encode()
             payload += message.SerializeToString()
             self.messages.append(payload)
 
@@ -96,23 +100,23 @@ class MockSubscriber(object):
     def __init__(self, address, context):
         self.messages = [None]
         for robot_id, robot_name, _ in ROBOT_DESCRIPTORS:
-            message = opp.REGISTRY[opp.Messages.Registered.name]()
+            message = REGISTRY[Messages.Registered.name]()
             message.team = "BLU"
             message.robot_id = "real_" + robot_id
             payload = "{0} {1} ".format(
                 robot_id,
-                opp.Messages.Registered.name).encode()
+                Messages.Registered.name).encode()
             payload += message.SerializeToString()
             self.messages.append(payload)
         for (robot_id, left, right), (robot_id_2, fire1, fire2) in zip(MOVES, FIRES):
-            message = opp.REGISTRY[opp.Messages.Input.name]()
+            message = REGISTRY[Messages.Input.name]()
             message.move.left = left
             message.move.right = right
             message.fire.weapon1 = fire1
             message.fire.weapon2 = fire2
             payload = "{0} {1} ".format(
                 "real_" + robot_id,
-                opp.Messages.Input.name).encode()
+                Messages.Input.name).encode()
             payload += message.SerializeToString()
             self.messages.append(payload)
 
@@ -153,7 +157,7 @@ def test_robot_registration():
     # we do not care about the admin
     admin_mock = unittest.mock.MagicMock()
     admin_mock.return_value = admin_mock
-    program = opp.Program(
+    program = Program(
         arguments, MockSubscriber, MockPusher, MockReplier, admin_mock)
     for robot_id, _, device in ROBOT_DESCRIPTORS:
         program.add_robot(robot_id, device)
@@ -272,25 +276,25 @@ class InputMocker(Mocker):
         print('Fake read')
         payload = None
         if InputMockerState.Register == self._state:
-            message = opp.REGISTRY[opp.Messages.Registered.name]()
+            message = REGISTRY[Messages.Registered.name]()
             # message.name = self._robot_name
             message.team = self._team
             message.robot_id = "real " + self._robot_id
             payload = "{0} {1} ".format(
                 self._robot_id,
-                opp.Messages.Registered.name).encode()
+                Messages.Registered.name).encode()
             payload += message.SerializeToString()
             print('Fake message (Registered) =', message)
             self._state = InputMockerState.Input
         elif InputMockerState.Input == self._state:
-            message = opp.REGISTRY[opp.Messages.Input.name]()
+            message = REGISTRY[Messages.Input.name]()
             message.move.left = INPUT_MOVE[0]
             message.move.right = INPUT_MOVE[1]
             message.fire.weapon1 = False
             message.fire.weapon2 = False
             payload = "{0} {1} ".format(
                 self._robot_id,
-                opp.Messages.Input.name).encode()
+                Messages.Input.name).encode()
             payload += message.SerializeToString()
             print('Fake message (Input) =', message)
         return payload
@@ -301,8 +305,8 @@ class InputMocker(Mocker):
             routing_id, message_type, raw_message = payload.split(b' ', 2)
             message_type = message_type.decode('ascii')
             routing_id = routing_id.decode('ascii')
-            if opp.Messages.Register.name == message_type:
-                message = opp.REGISTRY[message_type]()
+            if Messages.Register.name == message_type:
+                message = REGISTRY[message_type]()
                 message.ParseFromString(raw_message)
                 self._robot_id = message.temporary_robot_id
                 self._state = InputMockerState.Register
@@ -318,7 +322,7 @@ def test_robot_input():
     # we do not care about the admin
     admin_mock = unittest.mock.MagicMock()
     admin_mock.return_value = admin_mock
-    program = opp.Program(
+    program = Program(
         arguments,
         input_mocker.publisher_init_faker(),
         input_mocker.pusher_init_faker(),
@@ -373,7 +377,7 @@ def test_missing_server_game():
     # first call find no game server
     mock.decoder = unittest.mock.MagicMock()
     mock.decoder.success = False
-    wrapper = opp.BroadcasterMessageHubWrapper(
+    wrapper = BroadcasterMessageHubWrapper(
         datetime.timedelta(seconds=0),
         mock,
         subscriber_mock,
