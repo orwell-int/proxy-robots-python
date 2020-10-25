@@ -6,6 +6,7 @@ import datetime
 import socket
 import threading
 import unittest.mock
+import zmq
 
 import orwell_common.broadcast_listener
 import orwell_common.logging
@@ -158,7 +159,12 @@ def test_robot_registration():
     admin_mock = unittest.mock.MagicMock()
     admin_mock.return_value = admin_mock
     program = Program(
-        arguments, MockSubscriber, MockPusher, MockReplier, admin_mock)
+        zmq.Context(1),
+        arguments,
+        MockSubscriber,
+        MockPusher,
+        MockReplier,
+        admin_mock)
     for robot_id, _, device in ROBOT_DESCRIPTORS:
         program.add_robot(robot_id, device)
     # fake_robot = FakeRobot()
@@ -323,6 +329,7 @@ def test_robot_input():
     admin_mock = unittest.mock.MagicMock()
     admin_mock.return_value = admin_mock
     program = Program(
+        zmq.Context(1),
         arguments,
         input_mocker.publisher_init_faker(),
         input_mocker.pusher_init_faker(),
@@ -378,6 +385,7 @@ def test_missing_server_game():
     mock.decoder = unittest.mock.MagicMock()
     mock.decoder.success = False
     wrapper = BroadcasterMessageHubWrapper(
+        zmq.Context(1),
         datetime.timedelta(seconds=0),
         mock,
         subscriber_mock,

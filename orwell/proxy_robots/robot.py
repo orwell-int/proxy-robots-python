@@ -142,7 +142,7 @@ class Robot(object):
                 self, Messages.Input.name, self._robot_id)
         else:
             # maybe we should even halt when this happens
-            LOGGER.warn("Could not get message hub from Robot!")
+            LOGGER.warning("Could not get message hub from Robot!")
         # there is no longer a name attribute in Registered
         # if (message.name):
         # self._registered = True
@@ -169,5 +169,3 @@ class Robot(object):
     # Nothing yet.
     # """
     # pass
-
-

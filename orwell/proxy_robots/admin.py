@@ -2,7 +2,6 @@ import logging
 import zmq
 
 from orwell.proxy_robots.connectors import AdminSocket
-from orwell.proxy_robots.zmq_context import ZMQ_CONTEXT
 
 LOGGER = logging.getLogger(__name__)
 
@@ -12,10 +11,10 @@ class Admin(object):
 
     def __init__(
             self,
+            zmq_context,
             program,
             admin_port=9082,
-            admin_socket_type=AdminSocket,
-            zmq_context=ZMQ_CONTEXT):
+            admin_socket_type=AdminSocket):
         """
         `admin_port`: port to bind to and receive connections from the admin GUI
         """
@@ -34,8 +33,4 @@ class Admin(object):
             self._admin_socket.send_string(robots)
 
     def step(self):
-        try:
-            self._handle_admin_message(
-                self._admin_socket.recv_string(flags=zmq.DONTWAIT))
-        except zmq.error.Again:
-            pass
+        self._handle_admin_message(self._admin_socket.read())
