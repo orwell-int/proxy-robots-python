@@ -8,7 +8,6 @@ from orwell_common.broadcast import ServerGameDecoder
 from orwell.proxy_robots.connectors import Pusher
 from orwell.proxy_robots.connectors import Replier
 from orwell.proxy_robots.connectors import Subscriber
-from orwell.proxy_robots.zmq_context import ZMQ_CONTEXT
 from orwell.proxy_robots.registry import REGISTRY
 
 
@@ -24,13 +23,13 @@ class MessageHub(object):
 
     def __init__(
             self,
+            zmq_context,
             publisher_address,
             pusher_address,
             replier_address,
             subscriber_type=Subscriber,
             pusher_type=Pusher,
-            replier_type=Replier,
-            zmq_context=ZMQ_CONTEXT):
+            replier_type=Replier):
         """
         `publisher_address`: address to read from.
         `pusher_address`: address to write to.
@@ -159,6 +158,7 @@ class BroadcasterMessageHubWrapper(DumbMessageHubWrapper):
 
     def __init__(
             self,
+            zmq_context,
             delta_check,
             broadcast_type=Broadcast,
             subscriber_type=Subscriber,
@@ -168,6 +168,7 @@ class BroadcasterMessageHubWrapper(DumbMessageHubWrapper):
         `delta_check`: interval between two checks (test presence of game server).
         """
         super().__init__()
+        self._zmq_context = zmq_context
         self._subscriber_type = subscriber_type
         self._pusher_type = pusher_type
         self._replier_type = replier_type
@@ -198,6 +199,7 @@ class BroadcasterMessageHubWrapper(DumbMessageHubWrapper):
                 subscribe_address = self._broadcaster.decoder.subscribe_address
                 replier_address = self._broadcaster.decoder.reply_address
                 self._message_hub = MessageHub(
+                    self._zmq_context,
                     subscribe_address,
                     push_address,
                     replier_address,

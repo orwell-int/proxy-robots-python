@@ -2,6 +2,7 @@ import argparse
 import datetime
 import logging
 import time
+import zmq
 
 from orwell_common.broadcast import Broadcast
 from orwell_common.broadcast_listener import BroadcastListener
@@ -22,12 +23,14 @@ from orwell.proxy_robots.message_hub import DumbMessageHubWrapper
 from orwell.proxy_robots.message_hub import MessageHub
 from orwell.proxy_robots.robot import Robot
 
+ZMQ_CONTEXT = zmq.Context.instance(1)
 LOGGER = logging.getLogger(__name__)
 
 
 class Program(object):
     def __init__(
             self,
+            zmq_context,
             arguments,
             subscriber_type=Subscriber,
             pusher_type=Pusher,
@@ -40,6 +43,7 @@ class Program(object):
         `pusher_type`: see #MessageHub
         `replier_type`: see #MessageHub
         """
+        self._zmq_context = zmq_context
         if arguments.no_server_broadcast:
             ip = arguments.address
             push_address = "tcp://{ip}:{port}".format(
@@ -50,6 +54,7 @@ class Program(object):
                 ip=ip, port=arguments.replier_port)
             self._message_hub_wrapper = DumbMessageHubWrapper(
                 MessageHub(
+                    self._zmq_context,
                     subscribe_address,
                     push_address,
                     replier_address,
@@ -58,12 +63,13 @@ class Program(object):
                     replier_type))
         else:
             self._message_hub_wrapper = BroadcasterMessageHubWrapper(
+                self._zmq_context,
                 datetime.timedelta(seconds=5),
                 Broadcast,
                 subscriber_type,
                 pusher_type,
                 replier_type)
-        self._admin = admin_type(self, arguments.admin_port)
+        self._admin = admin_type(self._zmq_context, self, arguments.admin_port)
         self._engine = Engine()
         self._robots = {}  # id -> Robot
         if not arguments.no_proxy_broadcast:
@@ -157,7 +163,7 @@ def main():
     orwell_common.logging.configure_logging(arguments.verbose)
     sockets_lister = SocketsLister()
     robots = ['951']
-    program = Program(arguments)
+    program = Program(ZMQ_CONTEXT, arguments)
     for robot in robots:
         socket = sockets_lister.pop_available_socket()
         if socket:

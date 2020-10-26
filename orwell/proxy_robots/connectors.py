@@ -15,7 +15,7 @@ class Subscriber(object):
 
     def read(self):
         try:
-            return self._socket.recv(flags=zmq.DONTWAIT)
+            return self._socket.recv(flags=zmq.NOBLOCK)
         except zmq.error.Again:
             return None
 
@@ -49,17 +49,28 @@ class Replier(object):
         self._socket.send(message)
 
     def read(self):
-        return self._socket.recv(flags=zmq.DONTWAIT)
+        return self._socket.recv(flags=zmq.NOBLOCK)
 
 
 class AdminSocket(object):
     def __init__(self, admin_port, zmq_context):
-        self._context = zmq_context
-        self._admin = self._context.socket(zmq.REP)
-        self._admin.bind("tcp://*:{port}".format(port=admin_port))
+        self._zmq_context = zmq_context
+        self._socket = self._zmq_context.socket(zmq.REP)
+        self._socket.bind("tcp://*:{port}".format(port=admin_port))
 
-    def recv_string(self, flags=-1, encoding='utf-8'):
-        return self._admin.recv_string(flags, encoding)
+    def read(self):
+        try:
+            return self._socket.recv_string(zmq.NOBLOCK)
+        except zmq.error.Again:
+            pass
+        except zmq.ZMQError as e:
+            LOGGER.warning("AdminSocket could not read: %s %s", e.errno, e)
+            return None
 
-    def send_string(self, u, flags=-1, copy=True, encoding='utf-8', **kwargs):
-        return self._admin.send_string(u, flags, copy, encoding, **kwargs)
+    def write(self, message):
+        try:
+            return self._socket.send_string(message)
+        except zmq.ZMQError as e:
+            LOGGER.warning("AdminSocket could not send reply! %s %s", e.errno, e)
+            return None
+
