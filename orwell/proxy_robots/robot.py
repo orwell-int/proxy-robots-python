@@ -80,6 +80,12 @@ class Robot(object):
         """
         return self._registered
 
+    def to_dict(self):
+        address = self._device.address
+        if address is None:
+            address = ""
+        return {self._robot_id: {"address": address}}
+
     def queue_register(self):
         """
         Create an action that will take care of registering the robot and

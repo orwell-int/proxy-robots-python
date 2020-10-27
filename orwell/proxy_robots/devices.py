@@ -6,13 +6,17 @@ LOGGER = logging.getLogger(__name__)
 
 class FakeDevice(object):
     def __init__(self):
-        pass
+        self._address = None
 
     def __del__(self):
         """
         Just in case the last order was a move command, stop the robot.
         """
         self.stop()
+
+    @property
+    def address(self):
+        return self._address
 
     def move(self, left, right):
         """
@@ -48,6 +52,10 @@ class HarpiDevice(object):
         Just in case the last order was a move command, stop the robot.
         """
         self.stop()
+
+    @property
+    def address(self):
+        return self._address
 
     def move(self, left, right):
         """
