@@ -117,6 +117,8 @@ class Robot(object):
                 Messages.Register.name).encode()
             payload += message.SerializeToString()
             self._message_hub_wrapper.message_hub.post(payload)
+            return True
+        return False
 
     def notify(
             self,

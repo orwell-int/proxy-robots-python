@@ -7,6 +7,7 @@ import socket
 import threading
 import unittest.mock
 import zmq
+import queue
 
 import orwell_common.broadcast_listener
 import orwell_common.logging
@@ -373,34 +374,29 @@ class FakeSocket(object):
 
 def test_missing_server_game():
     fake_server_game = orwell_common.broadcast_listener.BroadcastListener()
-    # having zero as delta_check allows to ignore the time and check for the
-    # presence of server_game every time we call step
-    mock = unittest.mock.MagicMock()
-    mock.return_value = mock
     # No message should be received
     subscriber_mock = unittest.mock.MagicMock()
     subscriber_mock.return_value = subscriber_mock
     subscriber_mock.read.return_value = None
     # first call find no game server
-    mock.decoder = unittest.mock.MagicMock()
-    mock.decoder.success = False
+    # There are no message in the queue as the server has not been found yet
+    message_queue = queue.Queue()
     wrapper = BroadcasterMessageHubWrapper(
         zmq.Context(1),
-        datetime.timedelta(seconds=0),
-        mock,
+        message_queue,
         subscriber_mock,
         unittest.mock.MagicMock(),
         unittest.mock.MagicMock())
     assert_false(wrapper.is_valid)
     wrapper.step()
-    print(mock.mock_calls)
     # nothing running so far, no MessageHub should be created
     assert_false(wrapper.is_valid)
-    # do as if game server had made a proper reply
-    mock.decoder.success = True
-    mock.decoder.push_address = "127.0.0.1:9001"
-    mock.decoder.subscribe_address = "127.0.0.1:9000"
-    mock.decoder.reply_address = "127.0.0.1:9004"
+    # pretend game server had made a proper reply
+    push_address = "127.0.0.1:9001"
+    subscribe_address = "127.0.0.1:9000"
+    reply_address = "127.0.0.1:9004"
+    # server has been found and gave following addresses
+    message_queue.put((push_address, subscribe_address, reply_address))
     waiter = unittest.mock.MagicMock()
     wrapper.register_waiter(waiter)
     wrapper.step()
@@ -408,16 +404,16 @@ def test_missing_server_game():
     waiter.notify_message_hub.assert_called_once()
     waiter.reset_mock()
     assert_true(wrapper.is_valid)
-    # game server remains available
-    mock.send_one_broadcast_message.return_value = True
+    # game server remains available (no new message in the queue)
     wrapper.step()
     waiter.notify_message_hub.assert_not_called()
     # game server becomes unavailable
-    mock.send_one_broadcast_message.return_value = None
+    message_queue.put(None)
     wrapper.step()
     assert_false(wrapper.is_valid)
     waiter.notify_message_hub.assert_not_called()
     # game server becomes available again
+    message_queue.put((push_address, subscribe_address, reply_address))
     wrapper.step()
     waiter.notify_message_hub.assert_called_once()
     assert_true(wrapper.is_valid)
