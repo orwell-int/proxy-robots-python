@@ -1,9 +1,5 @@
 import collections
-import datetime
 import logging
-
-from orwell_common.broadcast import Broadcast
-from orwell_common.broadcast import ServerGameDecoder
 
 from orwell.proxy_robots.connectors import Pusher
 from orwell.proxy_robots.connectors import Replier
@@ -159,8 +155,7 @@ class BroadcasterMessageHubWrapper(DumbMessageHubWrapper):
     def __init__(
             self,
             zmq_context,
-            delta_check,
-            broadcast_type=Broadcast,
+            broadcast_message_queue,
             subscriber_type=Subscriber,
             pusher_type=Pusher,
             replier_type=Replier):
@@ -172,45 +167,38 @@ class BroadcasterMessageHubWrapper(DumbMessageHubWrapper):
         self._subscriber_type = subscriber_type
         self._pusher_type = pusher_type
         self._replier_type = replier_type
-        self._broadcaster = broadcast_type(ServerGameDecoder(), retries=1)
-        self._delta_check = delta_check
-        self._next_check = datetime.datetime.now()
+        self._broadcast_message_queue = broadcast_message_queue
 
     def _check_message_hub(self):
-        LOGGER.debug("BroadcasterMessageHubWrapper._check_message_hub")
-        if self._message_hub:
-            if not self._broadcaster.send_one_broadcast_message(silent=True):
-                LOGGER.info("Lost contact with ServerGame.")
+        # too verbose
+        #LOGGER.debug("BroadcasterMessageHubWrapper._check_message_hub")
+        if self._broadcast_message_queue.empty():
+            return
+        message = self._broadcast_message_queue.get()
+        self._broadcast_message_queue.task_done()
+        if message is None:
+            if self._message_hub:
                 self._message_hub = None
         else:
-            self._broadcaster.send_all_broadcast_messages()
-            if not self._broadcaster.decoder.success:
-                LOGGER.info("Could not find ServerGame.")
-            else:
-                # We assume this is still the same instance of server game
-                # or at least with the same properties.
-                # If the game server disconnects and a new one takes its place
-                # it might be unnoticed and things will not work properly.
-                LOGGER.info(
-                    "push: " + self._broadcaster.decoder.push_address +
-                    " / subscribe: " + self._broadcaster.decoder.subscribe_address +
-                    " / reply: " + self._broadcaster.decoder.reply_address)
-                push_address = self._broadcaster.decoder.push_address
-                subscribe_address = self._broadcaster.decoder.subscribe_address
-                replier_address = self._broadcaster.decoder.reply_address
-                self._message_hub = MessageHub(
-                    self._zmq_context,
-                    subscribe_address,
-                    push_address,
-                    replier_address,
-                    self._subscriber_type,
-                    self._pusher_type,
-                    self._replier_type)
-                self.notify_waiters()
+            # We assume this is still the same instance of server game
+            # or at least with the same properties.
+            # If the game server disconnects and a new one takes its place
+            # it might be unnoticed and things will not work properly.
+            push_address, subscribe_address, replier_address = message
+            LOGGER.info(
+                "push: " + push_address +
+                " / subscribe: " + subscribe_address +
+                " / reply: " + replier_address)
+            self._message_hub = MessageHub(
+                self._zmq_context,
+                subscribe_address,
+                push_address,
+                replier_address,
+                self._subscriber_type,
+                self._pusher_type,
+                self._replier_type)
+            self.notify_waiters()
 
     def step(self):
-        now = datetime.datetime.now()
-        if self._next_check <= now:
-            self._check_message_hub()
-            self._next_check = now + self._delta_check
+        self._check_message_hub()
         super().step()

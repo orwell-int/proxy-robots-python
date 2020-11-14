@@ -40,8 +40,8 @@ class Action(object):
         """
         Call the wrapped function.
         """
-        self._doer()
-        self._update_status()
+        sent = self._doer()
+        self._update_status(sent)
 
     def reset(self):
         """
@@ -56,16 +56,23 @@ class Action(object):
         """
         return self._status
 
-    def _update_status(self):
+    @property
+    def repeat(self):
+        return self._repeat
+
+    def _update_status(self, sent=False):
         """
         Update the status of the action.
         """
         updated = False
         if Status.created == self._status:
-            if self._proxy:
-                self._status = Status.pending
+            if not sent:
+                self._status = Status.failed
             else:
-                self._status = Status.waiting
+                if self._proxy:
+                    self._status = Status.pending
+                else:
+                    self._status = Status.waiting
             updated = True
         if not updated:
             if Status.pending == self._status:

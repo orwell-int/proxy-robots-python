@@ -21,9 +21,6 @@ class Engine(object):
         Check all pending actions to see if a notification has been received.
         Run all the actions that are in the created state.
         """
-        # LOGGER.debug('Engine.step()')
-        # LOGGER.debug('_created_actions = ' + str(self._created_actions))
-        # LOGGER.debug('_pending_actions = ' + str(self._pending_actions))
         to_remove = []
         new_actions = []
         for action in self._pending_actions:

@@ -6,7 +6,7 @@ LOGGER = logging.getLogger(__name__)
 
 class FakeDevice(object):
     def __init__(self):
-        self._address = None
+        self._address = "1.2.3.4"
 
     def __del__(self):
         """

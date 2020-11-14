@@ -3,8 +3,9 @@ import datetime
 import logging
 import time
 import zmq
+import queue
 
-from orwell_common.broadcast import Broadcast
+from orwell_common.broadcast_pinger import BroadcastPinger
 from orwell_common.broadcast_listener import BroadcastListener
 from orwell_common.sockets_lister import SocketsLister
 import orwell_common.broadcast
@@ -24,7 +25,7 @@ from orwell.proxy_robots.message_hub import MessageHub
 from orwell.proxy_robots.robot import Robot
 
 ZMQ_CONTEXT = zmq.Context.instance(1)
-LOGGER = logging.getLogger(__name__)
+LOGGER = logging.getLogger("orwell.proxy_robots")
 
 
 class Program(object):
@@ -61,23 +62,26 @@ class Program(object):
                     subscriber_type,
                     pusher_type,
                     replier_type))
+            self._broadcast_pinger = None
         else:
+            broadcast_message_queue = queue.Queue()
             self._message_hub_wrapper = BroadcasterMessageHubWrapper(
                 self._zmq_context,
-                datetime.timedelta(seconds=5),
-                Broadcast,
+                broadcast_message_queue,
                 subscriber_type,
                 pusher_type,
                 replier_type)
+            self._broadcast_pinger = BroadcastPinger(
+                broadcast_message_queue, sleep_duration=5, timeout=1)
         self._admin = admin_type(self._zmq_context, self, arguments.admin_port)
         self._engine = Engine()
         self._robots = {}  # id -> Robot
         if not arguments.no_proxy_broadcast:
-            self._broadcastListener = BroadcastListener(
+            self._broadcast_listener = BroadcastListener(
                 arguments.proxy_broadcast_port,
                 arguments.admin_port)
         else:
-            self._broadcastListener = None
+            self._broadcast_listener = None
 
     def add_robot(self, robot_id, device=None):
         """
@@ -86,11 +90,14 @@ class Program(object):
         robot = Robot(robot_id, self._message_hub_wrapper, self._engine, device)
         self._robots[robot_id] = robot
         robot_socket = device.get_socket()
-        port = robot_socket.getsockname()[1]
-        LOGGER.info(
-            "Robot {id} is using port {port}".format(
-                id=robot_id, port=port))
-        self._broadcastListener.add_socket_port(port)
+        if robot_socket:
+            port = robot_socket.getsockname()[1]
+            LOGGER.info(
+                "Robot {id} is using port {port}".format(
+                    id=robot_id, port=port))
+            self._broadcast_listener.add_socket_port(port)
+        else:
+            LOGGER.info("Robot %s is not getting a port", robot_id)
         robot.queue_register()
 
     @property
@@ -111,8 +118,10 @@ class Program(object):
         """
         This should be called once the robots have been added.
         """
-        if self._broadcastListener:
-            self._broadcastListener.start()
+        if self._broadcast_listener:
+            self._broadcast_listener.start()
+        if self._broadcast_pinger:
+            self._broadcast_pinger.start()
 
 
 def main():
@@ -159,9 +168,14 @@ def main():
         help='Verbose mode',
         default=False,
         action="store_true")
+    parser.add_argument(
+        "--ports-count",
+        help="The number of ports available for robots",
+        default=1,
+        type=int)
     arguments = parser.parse_args()
     orwell_common.logging.configure_logging(arguments.verbose)
-    sockets_lister = SocketsLister()
+    sockets_lister = SocketsLister(arguments.ports_count)
     robots = ['951']
     program = Program(ZMQ_CONTEXT, arguments)
     for robot in robots:
